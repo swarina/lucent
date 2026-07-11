@@ -35,6 +35,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# --- Generated protobuf/gRPC bindings (regenerated via tools/gen-proto.sh) ---
+/py/lucent/v1/
+/gateway/src/gen/
+
 # --- Node / web ---
 node_modules/
 web/dist/

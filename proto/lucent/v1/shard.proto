@@ -1,0 +1,96 @@
+// Lucent shard node service. Normative source: docs/protocol.md §1.2.
+syntax = "proto3";
+package lucent.v1;
+
+import "lucent/v1/common.proto";
+import "lucent/v1/events.proto";
+
+service ShardService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc InsertBatch(stream InsertBatchRequest) returns (InsertBatchResponse);
+  rpc Replicate(stream ReplicationBatch) returns (stream ReplicationAck);
+  rpc SealIndex(SealRequest) returns (SealResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc GetTraceBlob(TraceBlobRequest) returns (TraceBlob);
+  rpc InjectFault(FaultRequest) returns (FaultResponse);
+}
+
+message SearchRequest {
+  bytes trace_id = 1;         // 16 bytes, coordinator-minted
+  repeated float vector = 2;  // packed, len == dim, L2-normalized
+  uint32 k = 3;
+  uint32 ef_search = 4;
+  TraceLevel trace_level = 5;
+  uint64 shard_map_epoch = 6;  // shard returns FAILED_PRECONDITION if it knows a higher epoch
+}
+message SearchResponse {
+  repeated Hit hits = 1;    // <= k, sorted desc by score
+  uint32 visited = 2;       // candidates evaluated
+  uint64 t_search_ns = 3;
+  bool trace_available = 4;  // GetTraceBlob(trace_id) will succeed
+  string node_id = 5;
+}
+
+message Doc {
+  uint64 doc_id = 1;
+  repeated float vector = 2;  // packed, normalized
+  string title = 3;
+  string snippet = 4;         // <= 400 chars
+  string category = 5;
+}
+message InsertBatchRequest {
+  uint64 seq = 1;  // per-shard monotone, assigned by ingest
+  repeated Doc docs = 2;
+}
+message InsertBatchResponse {
+  uint64 applied_seq = 1;
+  uint64 doc_count = 2;
+}
+
+message ReplicationBatch {
+  uint64 seq = 1;
+  repeated Doc docs = 2;
+}
+message ReplicationAck {
+  uint64 applied_seq = 1;  // first ack (seq=applied) tells primary where to resume
+}
+
+message SealRequest {}  // params come from shard config/manifest
+message SealResponse {
+  uint64 doc_count = 1;
+  uint64 edge_count = 2;
+  uint64 build_ms = 3;
+}
+
+message StatusRequest {}
+message StatusResponse {
+  string node_id = 1;
+  uint32 shard_id = 2;
+  string replica = 3;  // "a" | "b"
+  NodeState state = 4;
+  uint64 doc_count = 5;
+  uint64 rss_bytes = 6;
+  uint64 primary_seq = 7;   // replication position
+  uint64 applied_seq = 8;
+  uint32 m = 9;
+  uint32 m0 = 10;
+  uint32 ef_construction = 11;
+  uint64 seed = 12;
+  uint64 build_progress = 13;  // rows inserted, valid in BUILDING
+}
+
+message TraceBlobRequest {
+  bytes trace_id = 1;
+}
+
+message FaultRequest {
+  oneof fault {
+    uint32 pause_ms = 1;  // hold all responses for pause_ms (simulated hang)
+    uint32 slow_ms = 2;   // add slow_ms latency to every RPC until CLEAR
+    float drop_p = 3;     // return UNAVAILABLE with probability p until CLEAR
+    bool clear = 4;
+  }
+}
+message FaultResponse {
+  string active = 1;  // human-readable current fault, "" if none
+}

@@ -1,0 +1,23 @@
+// Lucent embedding service. Normative source: docs/protocol.md §1.4.
+syntax = "proto3";
+package lucent.v1;
+
+service EmbedService {
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  rpc Info(InfoRequest) returns (InfoResponse);
+}
+
+message EmbedRequest {
+  repeated string texts = 1;  // 1..256
+}
+message EmbedResponse {
+  uint32 dim = 1;
+  uint32 count = 2;
+  repeated float vectors = 3;  // packed, row-major count x dim, normalized
+}
+message InfoRequest {}
+message InfoResponse {
+  string model = 1;
+  uint32 dim = 2;
+  bool ready = 3;
+}

@@ -9,10 +9,15 @@ dependencies = [
 
 [project.optional-dependencies]
 # Heavier deps land with their tasks to keep the base env fast to sync.
-#   embed  (M0-T6): sentence-transformers, grpcio, numpy
+#   embed  (M0-T6): sentence-transformers, numpy
 #   ingest (M0-T7): numpy, scikit-learn, umap-learn, zstandard, xxhash
 #   bench  (M1-T4): numpy
-dev = ["pytest>=8.0"]
+# grpcio-tools (M0-T2) bundles protoc + pulls grpcio + protobuf, covering both
+# codegen and the runtime the generated *_pb2_grpc modules import.
+dev = [
+  "pytest>=8.0",
+  "grpcio-tools>=1.60",
+]
 
 [project.scripts]
 lucent = "lucent.cli:main"

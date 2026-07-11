@@ -9,6 +9,12 @@ add_executable(lucent-hello hello.cc)
 target_link_libraries(lucent-hello PRIVATE lucent_warnings)
 target_compile_definitions(lucent-hello PRIVATE LUCENT_VERSION="${PROJECT_VERSION}")
 
+# Generated protobuf/gRPC stubs (M0-T2) + a compile/link smoke.
+add_subdirectory(proto)
+add_executable(lucent-proto-smoke proto/proto_smoke.cc)
+# Generated code is not warning-clean under our strict flags; keep warnings off it.
+target_link_libraries(lucent-proto-smoke PRIVATE lucent_proto)
+
 # add_subdirectory(common)
 # add_subdirectory(index)
 # add_subdirectory(shard)

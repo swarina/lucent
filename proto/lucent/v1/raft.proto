@@ -1,0 +1,55 @@
+// Lucent mini-Raft membership (M5). Normative source: docs/protocol.md §1.6.
+syntax = "proto3";
+package lucent.v1;
+
+import "lucent/v1/common.proto";
+
+service RaftService {
+  rpc RequestVote(VoteRequest) returns (VoteResponse);
+  rpc AppendEntries(AppendRequest) returns (AppendResponse);
+}
+service MembershipService {  // client-facing, leader-served
+  rpc Propose(ShardMapMutation) returns (ProposeResponse);  // NOT_LEADER redirects via leader_hint
+  rpc Watch(WatchRequest) returns (stream ShardMap);         // committed shard maps
+}
+
+message VoteRequest {
+  uint64 term = 1;
+  string candidate = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+message VoteResponse {
+  uint64 term = 1;
+  bool granted = 2;
+}
+message LogEntry {
+  uint64 index = 1;
+  uint64 term = 2;
+  ShardMapMutation mutation = 3;
+}
+message AppendRequest {
+  uint64 term = 1;
+  string leader = 2;
+  uint64 prev_index = 3;
+  uint64 prev_term = 4;
+  repeated LogEntry entries = 5;
+  uint64 commit_index = 6;
+}
+message AppendResponse {
+  uint64 term = 1;
+  bool success = 2;
+  uint64 match_index = 3;
+}
+message ShardMapMutation {
+  ShardMap proposed = 1;
+  uint64 expected_epoch = 2;  // CAS on epoch
+}
+message ProposeResponse {
+  bool committed = 1;
+  uint64 epoch = 2;
+  string leader_hint = 3;
+}
+message WatchRequest {
+  uint64 from_epoch = 1;
+}

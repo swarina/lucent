@@ -12,10 +12,9 @@ concurrency:
 
 jobs:
   cpp:
-    name: cpp (build + smoke)
+    name: cpp (proto + build + smoke)
     runs-on: ubuntu-latest
     env:
-      # GitHub Actions cache as the vcpkg binary cache (PLAN.md §2).
       VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
       - uses: actions/checkout@v4
@@ -28,56 +27,71 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config
       - name: Bootstrap vcpkg
         run: ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-      - name: Configure
+      - name: Configure (builds protobuf + grpc via vcpkg; cached after first run)
         run: cmake --preset dev
       - name: Build
         run: cmake --build --preset dev
-      - name: Smoke — hello binary runs
-        run: ./build/dev/cpp/lucent-hello
+      - name: Smoke — binaries run
+        run: |
+          ./build/dev/cpp/lucent-hello
+          ./build/dev/cpp/lucent-proto-smoke
       - name: Test
         run: ctest --preset dev --output-on-failure || echo "no tests yet"
 
   py:
-    name: py (lint + test)
+    name: py (proto + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: Sync
-        working-directory: py
         run: uv sync --extra dev
+        working-directory: py
+      - name: Generate proto bindings
+        run: bash tools/gen-proto.sh py
+      - name: Bindings import
+        run: uv run python -c "import lucent.v1.shard_pb2, lucent.v1.shard_pb2_grpc; print('proto import OK')"
+        working-directory: py
       - name: CLI help works
-        working-directory: py
         run: uv run lucent --help
-      - name: Test
         working-directory: py
+      - name: Test
         run: uv run pytest -q
+        working-directory: py
 
   web:
-    name: web + gateway (typecheck + build)
+    name: web + gateway (proto + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Gateway install + generate + build
+        working-directory: gateway
+        run: npm install
+      - name: Generate TS bindings
+        run: bash tools/gen-proto.sh ts
       - name: Gateway build
         working-directory: gateway
-        run: npm install && npm run build
+        run: npm run build
       - name: Web build
         working-directory: web
         run: npm install && npm run build
 
   proto:
-    name: proto (codegen is in sync)
+    name: proto (parse check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Regenerate and check for drift
-        run: |
-          bash tools/gen-proto.sh
-          git diff --exit-code
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install grpcio-tools
+        run: pip install "grpcio-tools>=1.60"
+      - name: All protos parse and imports resolve
+        run: python -m grpc_tools.protoc -I proto --descriptor_set_out=/dev/null proto/lucent/v1/*.proto

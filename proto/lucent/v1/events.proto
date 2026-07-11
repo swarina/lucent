@@ -1,0 +1,114 @@
+// Lucent observability event contract. Normative source: docs/protocol.md §1.5.
+syntax = "proto3";
+package lucent.v1;
+
+import "lucent/v1/common.proto";
+
+service CollectorService {
+  rpc PublishEvents(stream EventBatch) returns (Ack);
+}
+
+message EventBatch {
+  string node_id = 1;
+  repeated Event events = 2;
+}
+message Ack {}
+
+message Event {
+  string node_id = 1;
+  uint64 seq = 2;        // per-node monotone; gaps = drops (collector surfaces drop counts)
+  uint64 t_mono_ns = 3;  // per-node steady_clock
+  oneof body {
+    QuerySpan span = 10;
+    NodeStats stats = 11;
+    NodeStateChange state = 12;
+    FailoverExecuted failover = 13;
+    IngestProgress ingest = 14;
+    IndexBuildProgress build = 15;
+    RaftEvent raft = 16;
+  }
+}
+
+enum SpanKind {
+  SPAN_UNSPECIFIED = 0;
+  SPAN_QUERY_RECEIVED = 1;
+  SPAN_EMBED = 2;
+  SPAN_PLAN = 3;
+  SPAN_SHARD_RPC = 4;     // coordinator-side, per shard
+  SPAN_SHARD_SEARCH = 5;  // shard-side
+  SPAN_MERGE = 6;
+  SPAN_QUERY_DONE = 7;
+}
+
+message QuerySpan {
+  bytes trace_id = 1;
+  SpanKind kind = 2;
+  uint64 t_start_ns = 3;
+  uint64 t_end_ns = 4;
+  uint32 shard_id = 5;
+  string detail_json = 6;
+  // detail_json keys by kind:
+  //  PLAN:         {"probe":N,"shards":[ids],"replicas":{"2":"shard-2b"},"epoch":E}
+  //  SHARD_RPC:    {"status":"OK|DEADLINE|UNAVAILABLE","node":"shard-2a"}
+  //  SHARD_SEARCH: {"visited":412,"ef":100,"k":10}
+  //  QUERY_DONE:   {"coverage":"7/8","k":10}
+}
+
+message NodeStats {          // 2 Hz per node
+  uint64 rss_bytes = 1;
+  uint64 doc_count = 2;
+  float qps_1s = 3;
+  uint64 p50_us = 4;
+  uint64 p99_us = 5;
+  uint64 primary_seq = 6;
+  uint64 applied_seq = 7;    // lag = primary_seq - applied_seq (backup reports)
+  NodeState state = 8;
+  uint32 heartbeat_misses = 9;  // coordinator emits per watched node
+  uint64 edge_count = 10;
+  float cpu_pct = 11;
+}
+
+message NodeStateChange {
+  NodeState from = 1;
+  NodeState to = 2;
+  HealthState health = 3;
+  string reason = 4;
+}
+message FailoverExecuted {
+  uint32 shard_id = 1;
+  string old_primary = 2;
+  string new_primary = 3;
+  uint64 new_epoch = 4;
+}
+message IngestProgress {
+  string stage = 1;  // fetch|embed|partition|project|load|seal
+  uint64 done = 2;
+  uint64 total = 3;
+}
+message IndexBuildProgress {
+  uint64 inserted = 1;
+  uint64 total = 2;
+  uint64 edge_count = 3;
+  uint64 rss_bytes = 4;
+}
+message RaftEvent {
+  uint64 term = 1;
+  string role = 2;  // follower|candidate|leader
+  string leader = 3;
+  string detail = 4;
+}
+
+message TraceBlob {
+  bytes trace_id = 1;
+  string node_id = 2;
+  uint32 shard_id = 3;
+  uint64 t_start_mono_ns = 4;
+  // parallel packed arrays, equal length V (<= trace.max_visits_per_query)
+  repeated uint32 node = 5;      // shard row index (see data-formats.md)
+  repeated uint32 parent = 6;    // row we arrived from; == node for ENTRY
+  repeated float dist = 7;       // 1 - score (smaller = closer)
+  repeated uint32 t_off_us = 8;  // offset from t_start_mono_ns
+  repeated uint32 meta = 9;      // (layer & 0xF) << 3 | kind
+  uint32 dropped = 10;           // records lost to buffer cap - rendered in UI, never hidden
+  // meta.kind: 0 ENTRY, 1 VISIT, 2 ACCEPT (entered ef frontier), 3 PRUNE, 4 RESULT (final top-k mark)
+}

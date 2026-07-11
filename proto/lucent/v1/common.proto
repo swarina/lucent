@@ -1,0 +1,66 @@
+// Lucent shared types. Normative source: docs/protocol.md §1.1.
+syntax = "proto3";
+package lucent.v1;
+
+enum TraceLevel {
+  TRACE_LEVEL_UNSPECIFIED = 0;
+  TRACE_LEVEL_NONE = 1;   // load-gen, bench
+  TRACE_LEVEL_SPANS = 2;  // default for all traffic
+  TRACE_LEVEL_FULL = 3;   // UI-initiated only; shard-enforced rate cap
+}
+
+enum NodeState {
+  NODE_STATE_UNSPECIFIED = 0;
+  NODE_STATE_EMPTY = 1;
+  NODE_STATE_LOADING = 2;   // reading sealed index from disk
+  NODE_STATE_BUILDING = 3;  // ingest / HNSW build
+  NODE_STATE_SERVING = 4;
+  NODE_STATE_DRAINING = 5;
+}
+
+enum HealthState {
+  HEALTH_UNSPECIFIED = 0;
+  HEALTH_HEALTHY = 1;
+  HEALTH_SUSPECT = 2;
+  HEALTH_DOWN = 3;
+}
+
+message Hit {
+  uint64 doc_id = 1;    // inner product on normalized vectors
+  float score = 2;
+  string title = 3;
+  string snippet = 4;
+  uint32 shard_id = 5;  // annotated by coordinator (shard leaves 0)
+  string node_id = 6;   // replica that served it (annotated by coordinator)
+}
+
+message Coverage {
+  uint32 probed = 1;                    // shards the planner selected
+  uint32 answered = 2;                  // shards that replied within deadline
+  repeated uint32 missing_shards = 3;   // probed but failed/timed out
+  repeated uint32 unprobed_shards = 4;  // skipped by the probe knob
+}
+
+message Timings {
+  uint64 embed_us = 1;
+  uint64 plan_us = 2;
+  uint64 fanout_us = 3;  // first RPC sent -> last response/deadline
+  uint64 merge_us = 4;
+  uint64 total_us = 5;
+}
+
+message ShardMapEntry {
+  uint32 shard_id = 1;
+  string primary_node = 2;  // node_id, e.g. "shard-2a"
+  string backup_node = 3;   // empty pre-M3
+  string primary_addr = 4;  // host:port
+  string backup_addr = 5;
+  NodeState primary_state = 6;
+  NodeState backup_state = 7;
+}
+
+message ShardMap {
+  uint64 epoch = 1;               // bumped on every mutation
+  repeated ShardMapEntry shards = 2;
+  string partitioning = 3;        // "hash" | "semantic"
+}

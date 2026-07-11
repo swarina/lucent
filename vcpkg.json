@@ -3,7 +3,10 @@
   "name": "lucent",
   "version-string": "0.0.1",
   "description": "Distributed vector search engine you can watch think — C++ core (shard, coordinator, index, raft).",
-  "builtin-baseline": "9b75e789ece3f942159b8500584e35aafe3979ff",
-  "dependencies": [],
-  "$comment": "Dependencies are added per roadmap task to keep each milestone's build fast and verifiable. M0-T2 adds protobuf + grpc; M0-T3 adds spdlog; M0-T4 adds eigen3; tests add gtest; nlohmann-json for config. See docs/roadmap.md and PLAN.md §2."
+  "builtin-baseline": "f87344cac03158cbf1467264565f1fd36b382a24",
+  "dependencies": [
+    "protobuf",
+    "grpc"
+  ],
+  "$comment": "Deps added per roadmap task. M0-T2: protobuf + grpc (protoc + grpc_cpp_plugin for C++ codegen). Later: spdlog (M0-T3), eigen3 (M0-T4), gtest (tests), nlohmann-json (config). See docs/roadmap.md and PLAN.md §2."
 }

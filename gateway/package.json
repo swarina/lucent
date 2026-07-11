@@ -10,10 +10,16 @@
     "dev": "node --watch dist/index.js",
     "start": "node dist/index.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@grpc/grpc-js": "^1.11.0",
+    "long": "^5.2.3",
+    "protobufjs": "^7.3.0"
+  },
   "devDependencies": {
     "typescript": "^5.5.0",
-    "@types/node": "^20.14.0"
+    "@types/node": "^20.14.0",
+    "grpc-tools": "^1.12.4",
+    "ts-proto": "^2.2.0"
   },
-  "$comment": "Runtime deps (@grpc/grpc-js, ws, fastify) land with M0-T9."
+  "$comment": "grpc-tools bundles protoc; ts-proto is the codegen plugin (M0-T2). @grpc/grpc-js, long, protobufjs back the generated TS. Server deps (ws, fastify) land with M0-T9."
 }
