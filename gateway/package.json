@@ -1,0 +1,19 @@
+{
+  "name": "@lucent/gateway",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Lucent collector + gateway: gRPC event ingest, REST/WebSocket to the browser, static hosting.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node --watch dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  },
+  "$comment": "Runtime deps (@grpc/grpc-js, ws, fastify) land with M0-T9."
+}

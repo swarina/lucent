@@ -1,0 +1,28 @@
+[project]
+name = "lucent"
+version = "0.0.1"
+description = "Lucent control plane: dev supervisor, ingest, embedding service, bench, recorder."
+requires-python = ">=3.11"
+dependencies = [
+  "click>=8.1",
+]
+
+[project.optional-dependencies]
+# Heavier deps land with their tasks to keep the base env fast to sync.
+#   embed  (M0-T6): sentence-transformers, grpcio, numpy
+#   ingest (M0-T7): numpy, scikit-learn, umap-learn, zstandard, xxhash
+#   bench  (M1-T4): numpy
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+lucent = "lucent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lucent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

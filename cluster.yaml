@@ -1,0 +1,45 @@
+# Lucent default local topology. Overridden by `lucent dev` flags.
+# Spec: PLAN.md §4. Node identity: shard-{i}{a|b}, coord-0, embed-0, collector-0.
+
+cluster:
+  shards: 4
+  replicas: 2
+  partitioning: hash          # hash | semantic
+
+model:
+  name: all-MiniLM-L6-v2
+  dim: 384
+  metric: ip_normalized
+
+ports:
+  coordinator: 7000
+  embed: 7001
+  collector: 7010
+  gateway_http: 8080
+  supervisor_ctl: 7999        # localhost only
+  shard_base: 7100            # shard i, replica r -> 7100 + i*10 + r  (a=primary=+0, b=backup=+1)
+
+timeouts_ms:
+  query_total: 250
+  embed: 80
+  shard_search: 150
+
+health:
+  heartbeat_ms: 500
+  suspect_after_misses: 2
+  down_after_misses: 5
+
+index:
+  M: 16
+  M0: 32
+  ef_construction: 200
+  ef_search_default: 100
+  seed: 42
+
+trace:
+  max_visits_per_query: 65536
+  full_trace_max_qps: 5
+
+paths:
+  data: ./data
+  cache: ~/.cache/lucent
