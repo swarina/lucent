@@ -15,8 +15,8 @@ add_executable(lucent-proto-smoke proto/proto_smoke.cc)
 # Generated code is not warning-clean under our strict flags; keep warnings off it.
 target_link_libraries(lucent-proto-smoke PRIVATE lucent_proto)
 
-# add_subdirectory(common)
-# add_subdirectory(index)
-# add_subdirectory(shard)
-# add_subdirectory(coordinator)
-# add_subdirectory(tests)
+add_subdirectory(common)
+add_subdirectory(tests)
+# add_subdirectory(index)        M0-T4
+# add_subdirectory(shard)        M0-T5
+# add_subdirectory(coordinator)  M0-T8

@@ -6,7 +6,10 @@
   "builtin-baseline": "f87344cac03158cbf1467264565f1fd36b382a24",
   "dependencies": [
     "protobuf",
-    "grpc"
+    "grpc",
+    "yaml-cpp",
+    "spdlog",
+    "gtest"
   ],
-  "$comment": "Deps added per roadmap task. M0-T2: protobuf + grpc (protoc + grpc_cpp_plugin for C++ codegen). Later: spdlog (M0-T3), eigen3 (M0-T4), gtest (tests), nlohmann-json (config). See docs/roadmap.md and PLAN.md §2."
+  "$comment": "Deps added per roadmap task. M0-T2: protobuf + grpc. M0-T3: yaml-cpp (cluster.yaml config), spdlog (logging), gtest (unit tests). Later: eigen3 (M0-T4). See docs/roadmap.md and PLAN.md §2."
 }
