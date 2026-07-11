@@ -1,0 +1,57 @@
+# --- Local-only planning / design / agent docs (kept out of the repo by choice) ---
+/PLAN.md
+/CLAUDE.md
+/docs/
+
+# --- Claude / editor local ---
+.claude/settings.local.json
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# --- C++ / CMake / vcpkg ---
+build/
+out/
+cmake-build-*/
+vcpkg_installed/
+vcpkg/buildtrees/
+vcpkg/packages/
+vcpkg/downloads/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+compile_commands.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node / web ---
+node_modules/
+web/dist/
+gateway/dist/
+*.tsbuildinfo
+.vite/
+
+# --- Lucent runtime data & artifacts (generated, not source) ---
+data/
+bundle/
+bench/results/
+*.bundle
+testdata/golden/**/*.pb
+
+# --- Caches / models (never commit; regenerated locally) ---
+.cache/
+models/
+*.npy
+*.zst
+*.log
