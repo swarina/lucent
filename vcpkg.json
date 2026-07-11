@@ -9,7 +9,11 @@
     "grpc",
     "yaml-cpp",
     "spdlog",
-    "gtest"
+    "gtest",
+    "eigen3",
+    "xxhash",
+    "zstd",
+    "nlohmann-json"
   ],
-  "$comment": "Deps added per roadmap task. M0-T2: protobuf + grpc. M0-T3: yaml-cpp (cluster.yaml config), spdlog (logging), gtest (unit tests). Later: eigen3 (M0-T4). See docs/roadmap.md and PLAN.md §2."
+  "$comment": "Deps added per roadmap task. M0-T2: protobuf + grpc. M0-T3: yaml-cpp, spdlog, gtest. M0-T4: eigen3 (brute-force matvec), xxhash (manifest checksums), zstd (docs.jsonl.zst), nlohmann-json (manifest.json). See docs/roadmap.md and PLAN.md §2."
 }

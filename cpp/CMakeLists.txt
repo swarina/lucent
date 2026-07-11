@@ -16,7 +16,7 @@ add_executable(lucent-proto-smoke proto/proto_smoke.cc)
 target_link_libraries(lucent-proto-smoke PRIVATE lucent_proto)
 
 add_subdirectory(common)
+add_subdirectory(index)
 add_subdirectory(tests)
-# add_subdirectory(index)        M0-T4
 # add_subdirectory(shard)        M0-T5
 # add_subdirectory(coordinator)  M0-T8
