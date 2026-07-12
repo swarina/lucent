@@ -197,6 +197,7 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
              nlohmann::json{{"status", StatusLabel(out.status.error_code())},
                             {"node", target.node_id}}.dump());
     if (out.status.ok()) {
+      resp->set_visited_total(resp->visited_total() + out.resp.visited());
       answered.push_back(ShardResult{target.shard_id, std::move(out.resp)});
     } else {
       coverage->add_missing_shards(target.shard_id);

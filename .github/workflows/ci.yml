@@ -185,6 +185,8 @@ jobs:
         run: uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
       - name: Steel-thread smoke (query, spans, chaos, recovery)
         run: uv --project py run python py/tools/integration_smoke.py
+      - name: Bench recall gates (fake vectors, deterministic)
+        run: uv --project py run lucent bench --config .lucent/cluster-dev.yaml --queries 100 --ef 16,100 --gate
       - name: Dump logs on failure
         if: failure()
         run: cat /tmp/dev.log

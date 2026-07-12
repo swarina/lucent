@@ -21,6 +21,7 @@ message QueryResponse {
   bytes trace_id = 2;
   Coverage coverage = 3;
   Timings timings = 4;
+  uint64 visited_total = 5;  // sum of per-shard visited (bench + UI counter)
 }
 
 message ClusterStateRequest {}

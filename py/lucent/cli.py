@@ -72,10 +72,42 @@ def ingest(config: str, corpus: str, n: int, seed: int | None) -> None:
 
 
 @main.command()
-@click.option("--gate", is_flag=True, help="Exit non-zero if recall/latency gates fail.")
-def bench(gate: bool) -> None:
-    """Measure recall/latency vs the brute-force oracle."""
-    _todo("M1-T4")
+@click.option("--config", default="cluster.yaml", show_default=True)
+@click.option("--ef", default="16,32,64,100,200", show_default=True,
+              help="Comma-separated efSearch sweep.")
+@click.option("--probe", default="0", show_default=True,
+              help="Comma-separated probe sweep (0 = all shards).")
+@click.option("--queries", default=200, show_default=True,
+              help="Held-out queries to run per config.")
+@click.option("--out", default="bench/results/bench.json", show_default=True)
+@click.option("--gate", is_flag=True, help="Exit non-zero if recall gates fail.")
+@click.option("--overhead", is_flag=True,
+              help="Also measure SPANS/FULL instrumentation overhead vs NONE.")
+def bench(config: str, ef: str, probe: str, queries: int, out: str,
+          gate: bool, overhead: bool) -> None:
+    """Measure recall/latency vs the brute-force oracle (cluster must be up)."""
+    import logging
+    import pathlib
+
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s")
+    from lucent import bench as bench_mod
+
+    results = bench_mod.run_sweep(
+        config,
+        ef_list=[int(x) for x in ef.split(",")],
+        probe_list=[int(x) for x in probe.split(",")],
+        max_queries=queries,
+        out_path=pathlib.Path(out),
+    )
+    if overhead:
+        bench_mod.run_overhead(config)
+    if gate:
+        failures = bench_mod.check_gates(results)
+        for f in failures:
+            click.secho(f"GATE FAIL: {f}", fg="red", err=True)
+        if failures:
+            sys.exit(1)
+        click.secho("all bench gates green", fg="green")
 
 
 @main.command()

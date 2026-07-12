@@ -283,7 +283,10 @@ def load_shards(cfg, docs, vectors, assignments, *, seal: bool = True) -> LoadRe
     return LoadResult(shard_doc_counts=counts, sealed=seal)
 
 
-def make_embed_batch_fn(embed_addr: str, dim: int) -> Callable[[list[str]], "object"]:
+def make_embed_batch_fn(embed_addr: str, dim: int):
+    """Returns (embed_fn, service_model_name). The embedding cache is keyed
+    by the model the service actually serves (Info.model) — a --fake-embed
+    service must never populate the real model's cache."""
     import grpc
     import numpy as np
 
@@ -291,12 +294,15 @@ def make_embed_batch_fn(embed_addr: str, dim: int) -> Callable[[list[str]], "obj
 
     channel = grpc.insecure_channel(embed_addr)
     stub = embed_pb2_grpc.EmbedServiceStub(channel)
+    info = stub.Info(embed_pb2.InfoRequest(), timeout=60)
+    if info.dim != dim:
+        raise RuntimeError(f"embed service dim {info.dim} != config dim {dim}")
 
     def fn(texts: list[str]):
         resp = stub.Embed(embed_pb2.EmbedRequest(texts=texts), timeout=120)
         return np.asarray(resp.vectors, dtype=np.float32).reshape(-1, dim)
 
-    return fn
+    return fn, info.model
 
 
 def run(config_path: str, corpus_path: str, n: int, seed: int | None = None) -> None:
@@ -312,14 +318,31 @@ def run(config_path: str, corpus_path: str, n: int, seed: int | None = None) -> 
                                 else iter_jsonl(src), n, seed)
     log.info("sampled %d docs; embedding ...", len(docs))
 
-    embed_fn = make_embed_batch_fn(cfg.embed_addr, cfg.model.dim)
+    embed_fn, service_model = make_embed_batch_fn(cfg.embed_addr, cfg.model.dim)
+    if service_model != cfg.model.name:
+        log.warning("embed service model '%s' != config '%s' — caching under "
+                    "the service's name", service_model, cfg.model.name)
     vectors, chash = embed_with_cache(
-        docs, embed_fn, cfg.paths.cache, cfg.model.name, cfg.model.dim)
+        docs, embed_fn, cfg.paths.cache, service_model, cfg.model.dim)
     log.info("embedded (corpus_hash=%s); partitioning + loading ...", chash)
 
     assignments = hash_partition([d["doc_id"] for d in docs], cfg.cluster.shards)
     load_shards(cfg, docs, vectors, assignments)
     write_queries(docs, cfg.paths.data / "queries.json", n=1000, seed=seed)
+
+    # Oracle sidecars (bench, M1-T4): row-aligned doc_ids + a manifest tying
+    # the ingest to its embedding cache, so the brute-force referee can be
+    # rebuilt without re-reading the corpus.
+    import numpy as np
+
+    cfg.paths.data.mkdir(parents=True, exist_ok=True)
+    np.asarray([d["doc_id"] for d in docs], dtype="<u8").tofile(
+        cfg.paths.data / "doc_ids.u64")
+    (cfg.paths.data / "ingest-manifest.json").write_text(json.dumps({
+        "schema": 1, "corpus_hash": chash, "model": service_model,
+        "dim": cfg.model.dim, "n": len(docs), "shards": cfg.cluster.shards,
+        "partitioning": cfg.cluster.partitioning, "seed": seed,
+    }, indent=1) + "\n")
     log.info("ingest complete: %d docs across %d shards", len(docs), cfg.cluster.shards)
 
 
