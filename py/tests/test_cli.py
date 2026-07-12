@@ -17,5 +17,5 @@ def test_version() -> None:
 
 
 def test_unimplemented_command_exits_nonzero() -> None:
-    result = CliRunner().invoke(main, ["dev"])
+    result = CliRunner().invoke(main, ["record"])  # lands at M6-T2
     assert result.exit_code == 2

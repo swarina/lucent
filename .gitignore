@@ -48,6 +48,7 @@ gateway/dist/
 
 # --- Lucent runtime data & artifacts (generated, not source) ---
 data/
+.lucent/
 bundle/
 bench/results/
 *.bundle

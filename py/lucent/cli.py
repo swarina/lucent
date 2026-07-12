@@ -31,7 +31,8 @@ def main() -> None:
 
 @main.command()
 @click.option("--shards", default=4, show_default=True, help="Number of shards.")
-@click.option("--replicas", default=2, show_default=True, help="Replicas per shard.")
+@click.option("--replicas", default=1, show_default=True,
+              help="Replicas per shard (replication lands at M3; 'b' nodes idle EMPTY).")
 @click.option(
     "--partitioning",
     type=click.Choice(["hash", "semantic"]),
@@ -40,8 +41,10 @@ def main() -> None:
 )
 @click.option("--config", default="cluster.yaml", show_default=True)
 def dev(shards: int, replicas: int, partitioning: str, config: str) -> None:
-    """Spin up a local multi-process cluster (supervisor)."""
-    _todo("M0-T11")
+    """Spin up a local multi-process cluster (supervisor, blocking)."""
+    from lucent import dev as dev_mod
+
+    sys.exit(dev_mod.run_dev(config, shards, replicas, partitioning))
 
 
 @main.command()
