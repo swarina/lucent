@@ -105,7 +105,12 @@ void SaveShardDir(const std::string& dir, const ShardManifest& manifest,
   WriteFileBytes(dir + "/docs.jsonl.zst", compressed.data(), compressed.size());
 
   json files;
-  for (const char* name : {"ids.u64", "vectors.f32", "docs.jsonl.zst"}) {
+  std::vector<std::string> names = {"ids.u64", "vectors.f32", "docs.jsonl.zst"};
+  // Optional artifacts already written into the dir get checksummed too.
+  for (const char* opt : {"graph.bin", "projection.f32"}) {
+    if (fs::exists(dir + "/" + opt)) names.push_back(opt);
+  }
+  for (const std::string& name : names) {
     const std::string path = dir + "/" + name;
     files[name] = {{"bytes", fs::file_size(path)}, {"xxh3", XxhFileHex(path)}};
   }
@@ -113,8 +118,13 @@ void SaveShardDir(const std::string& dir, const ShardManifest& manifest,
       {"schema", manifest.schema},   {"shard_id", manifest.shard_id},
       {"replica", manifest.replica}, {"node_id", manifest.node_id},
       {"n", manifest.n},             {"dim", manifest.dim},
-      {"metric", manifest.metric},   {"index", {{"type", manifest.index_type},
-                                                {"seed", manifest.seed}}},
+      {"metric", manifest.metric},
+      {"index",
+       {{"type", manifest.index_type},
+        {"seed", manifest.seed},
+        {"M", manifest.m},
+        {"M0", manifest.m0},
+        {"ef_construction", manifest.ef_construction}}},
       {"corpus_hash", manifest.corpus_hash},
       {"files", files},
   };
@@ -135,6 +145,9 @@ LoadedShard LoadShardDir(const std::string& dir) {
   out.manifest.metric = m.at("metric").get<std::string>();
   out.manifest.index_type = m.at("index").at("type").get<std::string>();
   out.manifest.seed = m.at("index").at("seed").get<uint64_t>();
+  out.manifest.m = m.at("index").value("M", 0);
+  out.manifest.m0 = m.at("index").value("M0", 0);
+  out.manifest.ef_construction = m.at("index").value("ef_construction", 0);
   out.manifest.corpus_hash = m.at("corpus_hash").get<std::string>();
 
   // Verify every listed file before trusting any of it.

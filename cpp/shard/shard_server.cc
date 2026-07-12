@@ -11,14 +11,26 @@
 
 #include <nlohmann/json.hpp>
 
+#include <xxhash.h>
+
 #include "common/monotime.h"
 #include "common/proc_stats.h"
 #include "index/brute_force.h"
+#include "index/hnsw.h"
+#include "index/hnsw_io.h"
+#include "shard/trace_buffer.h"
 
 namespace lucent {
 
 namespace {
 constexpr size_t kLatencyWindow = 1024;
+
+// Replica seed rule (data-formats.md §2.1): replicas intentionally build
+// DIFFERENT graphs — same recall, slightly different result sets, surfaced
+// in the UI rather than hidden.
+uint64_t ReplicaSeed(uint64_t config_seed, const std::string& node_id) {
+  return config_seed ^ XXH3_64bits(node_id.data(), node_id.size());
+}
 
 lucent::v1::Event StateChangeEvent(lucent::v1::NodeState from,
                                    lucent::v1::NodeState to,
@@ -51,16 +63,20 @@ void ShardServer::Init() {
   }
   SetState(lucent::v1::NODE_STATE_LOADING, "manifest found");
   LoadedShard loaded = LoadShardDir(data_dir_);  // throws on checksum mismatch
-  if (loaded.manifest.index_type != "bruteforce") {
-    throw std::runtime_error("index type '" + loaded.manifest.index_type +
-                             "' not supported until M1");
-  }
   const uint64_t n = loaded.manifest.n;
   docs_ = std::move(loaded.docs);
-  index_ = std::make_unique<BruteForceIndex>(loaded.manifest.dim,
-                                             std::move(loaded.ids),
-                                             std::move(loaded.vectors),
-                                             /*sealed=*/true);
+  if (loaded.manifest.index_type == "hnsw") {
+    index_ = LoadHnswGraph(data_dir_ + "/graph.bin", loaded.manifest.dim,
+                           std::move(loaded.ids), std::move(loaded.vectors));
+  } else if (loaded.manifest.index_type == "bruteforce") {
+    index_ = std::make_unique<BruteForceIndex>(loaded.manifest.dim,
+                                               std::move(loaded.ids),
+                                               std::move(loaded.vectors),
+                                               /*sealed=*/true);
+  } else {
+    throw std::runtime_error("unknown index type '" +
+                             loaded.manifest.index_type + "'");
+  }
   applied_seq_.store(n);  // sealed dir == fully applied
   SetState(lucent::v1::NODE_STATE_SERVING, "loaded sealed index");
   spdlog::info("{}: serving {} docs from {}", identity_.id, n, data_dir_);
@@ -136,12 +152,27 @@ grpc::Status ShardServer::Search(grpc::ServerContext* /*ctx*/,
                             " < " + std::to_string(max_epoch_seen_.load()));
   }
 
+  // FULL tier: capture per-hop records unless the rate cap says otherwise.
+  // Over-cap queries silently serve at SPANS (the cap degrades the trace,
+  // never the search — protocol.md §2).
+  std::unique_ptr<TraceBuffer> trace;
+  if (req->trace_level() == lucent::v1::TRACE_LEVEL_FULL && GrantFullTrace()) {
+    trace = std::make_unique<TraceBuffer>(
+        static_cast<size_t>(config_.trace.max_visits_per_query));
+  }
+
   const uint64_t t0 = MonoNanos();
-  // FULL-trace capture arrives at M1-T3; until then FULL serves as SPANS.
   const IndexSearchResult result =
       index_->Search(req->vector().data(), req->k(), req->ef_search(),
-                     /*sink=*/nullptr);
+                     trace.get());
   const uint64_t t1 = MonoNanos();
+
+  if (trace != nullptr) {
+    // Blob assembly happens after the timed search; GetTraceBlob pulls it
+    // out-of-band right after the response returns.
+    StoreBlob(trace->Seal(req->trace_id(), identity_.id,
+                          static_cast<uint32_t>(identity_.shard_id)));
+  }
 
   for (const IndexHit& h : result.hits) {
     auto* hit = resp->add_hits();
@@ -154,7 +185,7 @@ grpc::Status ShardServer::Search(grpc::ServerContext* /*ctx*/,
   }
   resp->set_visited(result.visited);
   resp->set_t_search_ns(t1 - t0);
-  resp->set_trace_available(false);
+  resp->set_trace_available(trace != nullptr);
   resp->set_node_id(identity_.id);
 
   searches_total_.fetch_add(1, std::memory_order_relaxed);
@@ -249,11 +280,44 @@ grpc::Status ShardServer::SealIndex(grpc::ServerContext* /*ctx*/,
     return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
                         "SealIndex only in BUILDING");
   }
+  if (staged_ids_.empty()) {
+    return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+                        "nothing staged — insert before sealing");
+  }
   const uint64_t t0 = MonoNanos();
+  const uint64_t seed = ReplicaSeed(config_.index.seed, identity_.id);
 
-  auto index = std::make_unique<BruteForceIndex>(
-      config_.model.dim, staged_ids_, staged_vectors_, /*sealed=*/false);
-  index->Seal();
+  std::unique_ptr<VectorIndex> index;
+  if (config_.index.type == "hnsw") {
+    HnswIndex::Params params;
+    params.m = config_.index.m;
+    params.m0 = config_.index.m0;
+    params.ef_construction = config_.index.ef_construction;
+    params.seed = seed;
+    auto hnsw = std::make_unique<HnswIndex>(config_.model.dim, params);
+    const size_t dim = static_cast<size_t>(config_.model.dim);
+    for (size_t i = 0; i < staged_ids_.size(); ++i) {
+      hnsw->Add(staged_ids_[i], staged_vectors_.data() + i * dim);
+      if (emitter_ != nullptr && (i + 1) % 512 == 0) {
+        lucent::v1::Event e;
+        auto* b = e.mutable_build();
+        b->set_inserted(i + 1);
+        b->set_total(staged_ids_.size());
+        b->set_edge_count(hnsw->EdgeCount());
+        b->set_rss_bytes(CurrentRssBytes());
+        emitter_->Emit(std::move(e));
+      }
+    }
+    hnsw->Seal();
+    std::filesystem::create_directories(data_dir_);
+    SaveHnswGraph(*hnsw, data_dir_ + "/graph.bin");  // before SaveShardDir:
+    index = std::move(hnsw);                         // manifest checksums it
+  } else {
+    auto bf = std::make_unique<BruteForceIndex>(
+        config_.model.dim, staged_ids_, staged_vectors_, /*sealed=*/false);
+    bf->Seal();
+    index = std::move(bf);
+  }
 
   ShardManifest manifest;
   manifest.shard_id = identity_.shard_id;
@@ -261,8 +325,13 @@ grpc::Status ShardServer::SealIndex(grpc::ServerContext* /*ctx*/,
   manifest.node_id = identity_.id;
   manifest.n = staged_ids_.size();
   manifest.dim = config_.model.dim;
-  manifest.index_type = "bruteforce";
-  manifest.seed = config_.index.seed;
+  manifest.index_type = config_.index.type;
+  manifest.seed = seed;
+  if (config_.index.type == "hnsw") {
+    manifest.m = config_.index.m;
+    manifest.m0 = config_.index.m0;
+    manifest.ef_construction = config_.index.ef_construction;
+  }
   manifest.corpus_hash = "";  // populated once ingest carries it (M0-T7 note)
   SaveShardDir(data_dir_, manifest, staged_ids_, staged_vectors_, staged_docs_);
 
@@ -273,7 +342,8 @@ grpc::Status ShardServer::SealIndex(grpc::ServerContext* /*ctx*/,
   staged_docs_ = {};
 
   resp->set_doc_count(index_->Size());
-  resp->set_edge_count(0);  // brute force has no graph
+  const auto* hnsw = dynamic_cast<const HnswIndex*>(index_.get());
+  resp->set_edge_count(hnsw != nullptr ? hnsw->EdgeCount() : 0);
   resp->set_build_ms((MonoNanos() - t0) / 1'000'000);
   SetState(lucent::v1::NODE_STATE_SERVING, "sealed");
   return grpc::Status::OK;
@@ -304,10 +374,44 @@ grpc::Status ShardServer::Status(grpc::ServerContext* /*ctx*/,
 }
 
 grpc::Status ShardServer::GetTraceBlob(grpc::ServerContext* /*ctx*/,
-                                       const lucent::v1::TraceBlobRequest* /*req*/,
-                                       lucent::v1::TraceBlob* /*resp*/) {
-  return grpc::Status(grpc::StatusCode::NOT_FOUND,
-                      "FULL trace capture lands at M1-T3");
+                                       const lucent::v1::TraceBlobRequest* req,
+                                       lucent::v1::TraceBlob* resp) {
+  std::lock_guard<std::mutex> lock(trace_mu_);
+  auto it = blobs_.find(req->trace_id());
+  if (it == blobs_.end()) {
+    return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                        "no trace blob for this trace_id (not FULL, "
+                        "rate-capped, or evicted)");
+  }
+  *resp = it->second;
+  return grpc::Status::OK;
+}
+
+bool ShardServer::GrantFullTrace() {
+  const uint64_t now = MonoNanos();
+  std::lock_guard<std::mutex> lock(trace_mu_);
+  while (!full_grants_ns_.empty() &&
+         now - full_grants_ns_.front() > 1'000'000'000ULL) {
+    full_grants_ns_.pop_front();
+  }
+  if (full_grants_ns_.size() >=
+      static_cast<size_t>(config_.trace.full_trace_max_qps)) {
+    return false;
+  }
+  full_grants_ns_.push_back(now);
+  return true;
+}
+
+void ShardServer::StoreBlob(lucent::v1::TraceBlob blob) {
+  std::lock_guard<std::mutex> lock(trace_mu_);
+  const std::string key = blob.trace_id();
+  if (blobs_.emplace(key, std::move(blob)).second) {
+    blob_order_.push_back(key);
+    while (blob_order_.size() > kMaxStoredBlobs) {
+      blobs_.erase(blob_order_.front());
+      blob_order_.pop_front();
+    }
+  }
 }
 
 grpc::Status ShardServer::InjectFault(grpc::ServerContext* /*ctx*/,

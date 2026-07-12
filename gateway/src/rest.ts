@@ -14,7 +14,8 @@ import {
   QueryResponse,
 } from "./gen/lucent/v1/coordinator.js";
 import { TraceLevel } from "./gen/lucent/v1/common.js";
-import { Event } from "./gen/lucent/v1/events.js";
+import { Event, TraceBlob } from "./gen/lucent/v1/events.js";
+import { ShardServiceClient, TraceBlobRequest } from "./gen/lucent/v1/shard.js";
 
 interface QueryBody {
   text?: string;
@@ -89,12 +90,61 @@ export function registerRoutes(
     );
   });
 
+  // Shard clients for out-of-band TraceBlob pulls, keyed by node id.
+  const shardClients = new Map<string, ShardServiceClient>();
+  const shardClient = (nodeId: string): ShardServiceClient | null => {
+    const m = /^shard-(\d+)([ab])$/.exec(nodeId);
+    if (!m) return null;
+    let client = shardClients.get(nodeId);
+    if (!client) {
+      const port =
+        config.ports.shardBase + Number(m[1]) * 10 + (m[2] === "a" ? 0 : 1);
+      client = new ShardServiceClient(
+        `127.0.0.1:${port}`,
+        grpc.credentials.createInsecure(),
+      );
+      shardClients.set(nodeId, client);
+    }
+    return client;
+  };
+
   app.get<{ Params: { id: string } }>("/api/trace/:id", (req, reply) => {
-    const spans = store
-      .spansForTrace(req.params.id)
-      .map((e) => Event.toJSON(e));
-    void reply.send({ spans, blobs: [] }); // blobs arrive with M1-T3
+    const events = store.spansForTrace(req.params.id);
+    const spans = events.map((e) => Event.toJSON(e));
+    // Shard-side SHARD_SEARCH spans identify which nodes hold FULL blobs.
+    const blobs = events
+      .filter((e) => e.span?.kind === 5 /* SPAN_SHARD_SEARCH */)
+      .map((e) => ({ nodeId: e.nodeId, shardId: e.span?.shardId ?? 0 }));
+    void reply.send({ spans, blobs });
   });
+
+  app.get<{ Params: { id: string; nodeId: string } }>(
+    "/api/trace/:id/blob/:nodeId",
+    (req, reply) => {
+      const client = shardClient(req.params.nodeId);
+      if (!client) {
+        void reply.code(400).send({
+          error: { code: "BAD_NODE", message: `not a shard node: ${req.params.nodeId}` },
+        });
+        return;
+      }
+      const breq = TraceBlobRequest.fromPartial({
+        traceId: Buffer.from(req.params.id, "hex"),
+      });
+      client.getTraceBlob(breq, (err: grpc.ServiceError | null, blob?: TraceBlob) => {
+        if (err || !blob) {
+          const code = err?.code ?? grpc.status.UNKNOWN;
+          void reply.code(grpcToHttp(code)).send({
+            error: { code: grpc.status[code], message: err?.details ?? "unknown" },
+          });
+          return;
+        }
+        void reply
+          .header("content-type", "application/octet-stream")
+          .send(Buffer.from(TraceBlob.encode(blob).finish()));
+      });
+    },
+  );
 
   app.get("/api/ready", (_req, reply) => {
     coord.getClusterState(ClusterStateRequest.create(), (err) => {

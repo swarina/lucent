@@ -28,6 +28,9 @@ struct ShardManifest {
   std::string metric = "ip_normalized";
   std::string index_type;   // "bruteforce" | "hnsw"
   uint64_t seed = 0;
+  int m = 0;                 // hnsw params (0 when bruteforce)
+  int m0 = 0;
+  int ef_construction = 0;
   std::string corpus_hash;  // hex; ties the dir to its source corpus
 };
 

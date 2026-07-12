@@ -39,7 +39,7 @@ ports:
   shard_base: 7100
 timeouts_ms: { query_total: 250, embed: 80, shard_search: 150 }
 health: { heartbeat_ms: 500, suspect_after_misses: 2, down_after_misses: 5 }
-index: { M: 16, M0: 32, ef_construction: 200, ef_search_default: 100, seed: 42 }
+index: { type: hnsw, M: 16, M0: 32, ef_construction: 200, ef_search_default: 100, seed: 42 }
 trace: { max_visits_per_query: 65536, full_trace_max_qps: 5 }
 paths: { data: ./data, cache: ~/.cache/lucent }
 )";
@@ -54,6 +54,7 @@ TEST(Config, LoadsAllFields) {
   EXPECT_EQ(c.ports.coordinator, 7000);
   EXPECT_EQ(c.timeouts_ms.embed, 80);
   EXPECT_EQ(c.health.down_after_misses, 5);
+  EXPECT_EQ(c.index.type, "hnsw");
   EXPECT_EQ(c.index.m, 16);
   EXPECT_EQ(c.index.m0, 32);
   EXPECT_EQ(c.index.seed, 42u);

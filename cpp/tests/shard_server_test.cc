@@ -150,7 +150,8 @@ TEST_F(ShardServerTest, LifecycleInsertSealSearch) {
   EXPECT_EQ(resp.hits(1).doc_id(), 50u);            // 45° neighbor second
   EXPECT_EQ(resp.hits(0).title(), "title-10");      // snippet hydration
   EXPECT_EQ(resp.hits(0).snippet(), "snippet-10");
-  EXPECT_EQ(resp.visited(), 5u);
+  EXPECT_GE(resp.visited(), 1u);  // hnsw: entry + beam, <= n
+  EXPECT_LE(resp.visited(), 5u);
   EXPECT_EQ(resp.node_id(), "shard-0a");
   EXPECT_FALSE(resp.trace_available());
 
@@ -235,6 +236,77 @@ TEST_F(ShardServerTest, FaultInjection) {
                       .count();
   EXPECT_GE(ms, 100);
   inject(clear);
+}
+
+TEST_F(ShardServerTest, FullTraceCapturedAndFetchable) {
+  InsertAndSeal(UnitDocs());
+  grpc::ClientContext ctx;
+  pb::SearchRequest req;
+  req.set_trace_id("full-trace-000001");
+  for (float v : {1.0F, 0.0F, 0.0F, 0.0F}) req.add_vector(v);
+  req.set_k(3);
+  req.set_ef_search(10);
+  req.set_trace_level(pb::TRACE_LEVEL_FULL);
+  req.set_shard_map_epoch(1);
+  pb::SearchResponse resp;
+  ASSERT_TRUE(stub_->Search(&ctx, req, &resp).ok());
+  EXPECT_TRUE(resp.trace_available());
+
+  grpc::ClientContext bctx;
+  pb::TraceBlobRequest breq;
+  breq.set_trace_id("full-trace-000001");
+  pb::TraceBlob blob;
+  ASSERT_TRUE(stub_->GetTraceBlob(&bctx, breq, &blob).ok());
+  EXPECT_EQ(blob.node_id(), "shard-0a");
+  EXPECT_GT(blob.t_start_mono_ns(), 0u);
+  const int v = blob.node_size();
+  ASSERT_GT(v, 0);
+  ASSERT_EQ(blob.parent_size(), v);      // parallel arrays, equal length
+  ASSERT_EQ(blob.dist_size(), v);
+  ASSERT_EQ(blob.t_off_us_size(), v);
+  ASSERT_EQ(blob.meta_size(), v);
+  EXPECT_EQ(blob.dropped(), 0u);
+  int results = 0;
+  for (int i = 0; i < v; ++i) {
+    const uint32_t kind = blob.meta(i) & 0x7U;
+    EXPECT_LE(kind, 4u);                 // ENTRY..RESULT only
+    if (kind == 4) ++results;
+    EXPECT_LT(blob.node(i), 5u);         // rows in range
+  }
+  EXPECT_EQ(results, resp.hits_size());  // RESULT marks == returned hits
+
+  // SPANS-level search leaves no blob.
+  grpc::ClientContext ctx2;
+  req.set_trace_id("spans-only-000002");
+  req.set_trace_level(pb::TRACE_LEVEL_SPANS);
+  pb::SearchResponse resp2;
+  ASSERT_TRUE(stub_->Search(&ctx2, req, &resp2).ok());
+  EXPECT_FALSE(resp2.trace_available());
+  grpc::ClientContext bctx2;
+  breq.set_trace_id("spans-only-000002");
+  pb::TraceBlob blob2;
+  EXPECT_EQ(stub_->GetTraceBlob(&bctx2, breq, &blob2).error_code(),
+            grpc::StatusCode::NOT_FOUND);
+}
+
+TEST_F(ShardServerTest, FullTraceRateCapDegradesNotFails) {
+  InsertAndSeal(UnitDocs());
+  // Repo config caps FULL at 5/s; fire 9 quickly: all succeed, only 5 traced.
+  int available = 0;
+  for (int i = 0; i < 9; ++i) {
+    grpc::ClientContext ctx;
+    pb::SearchRequest req;
+    req.set_trace_id("cap-test-" + std::to_string(i));
+    for (float v : {1.0F, 0.0F, 0.0F, 0.0F}) req.add_vector(v);
+    req.set_k(1);
+    req.set_ef_search(10);
+    req.set_trace_level(pb::TRACE_LEVEL_FULL);
+    req.set_shard_map_epoch(1);
+    pb::SearchResponse resp;
+    ASSERT_TRUE(stub_->Search(&ctx, req, &resp).ok()) << i;
+    if (resp.trace_available()) ++available;
+  }
+  EXPECT_EQ(available, 5);  // trace.full_trace_max_qps in cluster.yaml
 }
 
 TEST_F(ShardServerTest, RestartReloadsSealedIndex) {

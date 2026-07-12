@@ -30,6 +30,7 @@ health:
   down_after_misses: 5
 
 index:
+  type: hnsw                  # hnsw | bruteforce
   M: 16
   M0: 32
   ef_construction: 200

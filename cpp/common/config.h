@@ -43,6 +43,7 @@ struct Config {
   } health;
 
   struct Index {
+    std::string type = "hnsw";  // "hnsw" | "bruteforce"
     int m = 16;
     int m0 = 32;
     int ef_construction = 200;

@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <random>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <grpcpp/grpcpp.h>
@@ -93,6 +95,18 @@ class ShardServer final : public lucent::v1::ShardService::Service {
 
   // Epoch staleness check (protocol.md §2): highest epoch seen wins.
   std::atomic<uint64_t> max_epoch_seen_{0};
+
+  // FULL-trace machinery (M1-T3). Blob store: small FIFO keyed by trace_id,
+  // pulled out-of-band via GetTraceBlob. Rate cap: sliding 1s window of FULL
+  // grants; over the cap a query silently serves at SPANS (protocol.md §2 —
+  // the cap degrades the trace, never the search).
+  bool GrantFullTrace();
+  void StoreBlob(lucent::v1::TraceBlob blob);
+  static constexpr size_t kMaxStoredBlobs = 16;
+  std::mutex trace_mu_;
+  std::unordered_map<std::string, lucent::v1::TraceBlob> blobs_;
+  std::deque<std::string> blob_order_;
+  std::deque<uint64_t> full_grants_ns_;
 
   // Fault injection (internals.md §4).
   std::mutex fault_mu_;

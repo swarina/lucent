@@ -81,6 +81,12 @@ Config Config::Load(const std::string& path) {
   c.health.down_after_misses = Get<int>(health, "down_after_misses", "health");
 
   YAML::Node index = Require(root, "index", "");
+  c.index.type = Get<std::string>(index, "type", "index");
+  if (c.index.type != "hnsw" && c.index.type != "bruteforce") {
+    throw std::runtime_error(
+        "cluster.yaml: index.type must be 'hnsw' or 'bruteforce', got '" +
+        c.index.type + "'");
+  }
   c.index.m = Get<int>(index, "M", "index");
   c.index.m0 = Get<int>(index, "M0", "index");
   c.index.ef_construction = Get<int>(index, "ef_construction", "index");
