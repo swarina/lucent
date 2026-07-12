@@ -45,15 +45,23 @@ def dev(shards: int, replicas: int, partitioning: str, config: str) -> None:
 
 
 @main.command()
-@click.option("--corpus", default="arxiv", show_default=True)
+@click.option("--config", default="cluster.yaml", show_default=True)
+@click.option("--corpus", default="arxiv", show_default=True,
+              help="'arxiv' (fetch/cached dump) or a path to a .jsonl/.jsonl.gz")
 @click.option("--n", default=50000, show_default=True, help="Documents to ingest.")
-@click.option("--shards", default=4, show_default=True)
-@click.option(
-    "--partitioning", type=click.Choice(["hash", "semantic"]), default="hash"
-)
-def ingest(corpus: str, n: int, shards: int, partitioning: str) -> None:
-    """Ingest a corpus: fetch -> embed -> partition -> project -> load -> seal."""
-    _todo("M0-T7")
+@click.option("--seed", default=None, type=int, help="Sampling seed (default: index.seed).")
+def ingest(config: str, corpus: str, n: int, seed: int | None) -> None:
+    """Ingest a corpus into a RUNNING cluster: sample -> embed -> load -> seal."""
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s")
+    from lucent import config as config_mod
+    from lucent import ingest as ingest_mod
+
+    if corpus == "arxiv":
+        cfg = config_mod.load(config)
+        corpus = str(ingest_mod.fetch_corpus_file(cfg.paths.cache / "corpus"))
+    ingest_mod.run(config, corpus, n=n, seed=seed)
 
 
 @main.command()
@@ -89,11 +97,23 @@ def corpus() -> None:
 
 
 @corpus.command("fetch")
-@click.option("--name", default="arxiv", show_default=True)
-@click.option("--n", default=50000, show_default=True)
-def corpus_fetch(name: str, n: int) -> None:
-    """Fetch and normalize a public corpus."""
-    _todo("M0-T7")
+@click.option("--config", default="cluster.yaml", show_default=True)
+@click.option("--max-mb", default=None, type=int,
+              help="Fetch only the first N MB (partial stream; for samples/CI).")
+def corpus_fetch(config: str, max_mb: int | None) -> None:
+    """Download the arXiv abstracts dump into the corpus cache (one-time)."""
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s")
+    from lucent import config as config_mod
+    from lucent import ingest as ingest_mod
+
+    cfg = config_mod.load(config)
+    path = ingest_mod.fetch_corpus_file(
+        cfg.paths.cache / "corpus",
+        max_bytes=max_mb * (1 << 20) if max_mb else None,
+    )
+    click.echo(f"corpus at {path}")
 
 
 @main.group()
