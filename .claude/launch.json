@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "lucent-dev",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["--project", "py", "run", "lucent", "dev", "--shards", "2"],
+      "port": 8080
+    }
+  ]
+}
