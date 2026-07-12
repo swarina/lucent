@@ -126,6 +126,10 @@ def serve(config_path: str) -> None:
         raise RuntimeError(
             f"model dim {encoder.dim} != config model.dim {cfg.model.dim}"
         )
+    # Warm the encoder before advertising readiness: torch's first encode in a
+    # fresh process can take hundreds of ms, which would blow the
+    # coordinator's embed deadline on the very first query.
+    encoder.encode(["warmup"])
 
     server, port = make_server(encoder, f"127.0.0.1:{cfg.ports.embed}")
     server.start()
