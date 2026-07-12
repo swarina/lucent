@@ -121,6 +121,44 @@ export function registerRoutes(
     void reply.send({ spans, blobs });
   });
 
+  // All of a trace's FULL blobs, decoded to JSON in one call — the inspector
+  // wants every shard's traversal without N binary round-trips + a browser
+  // protobuf decoder. Shard ids come from the SHARD_SEARCH spans.
+  app.get<{ Params: { id: string } }>("/api/trace/:id/blobs", async (req, reply) => {
+    const holders = store
+      .spansForTrace(req.params.id)
+      .filter((e) => e.span?.kind === 5)
+      .map((e) => ({ nodeId: e.nodeId, shardId: e.span?.shardId ?? 0 }));
+
+    const fetchBlob = (nodeId: string) =>
+      new Promise<TraceBlob | null>((resolve) => {
+        const client = shardClient(nodeId);
+        if (!client) return resolve(null);
+        const breq = TraceBlobRequest.fromPartial({
+          traceId: Buffer.from(req.params.id, "hex"),
+        });
+        client.getTraceBlob(breq, (err, blob) => resolve(err ? null : (blob ?? null)));
+      });
+
+    const out: Record<string, unknown> = {};
+    await Promise.all(
+      holders.map(async ({ nodeId, shardId }) => {
+        const blob = await fetchBlob(nodeId);
+        if (!blob) return;
+        out[nodeId] = {
+          shardId,
+          node: blob.node,
+          parent: blob.parent,
+          dist: blob.dist,
+          tOffUs: blob.tOffUs,
+          meta: blob.meta, // (layer & 0xF) << 3 | kind
+          dropped: blob.dropped,
+        };
+      }),
+    );
+    return reply.send({ traceId: req.params.id, blobs: out });
+  });
+
   app.get<{ Params: { id: string; nodeId: string } }>(
     "/api/trace/:id/blob/:nodeId",
     (req, reply) => {

@@ -31,6 +31,7 @@ export interface QueryResponseJson {
   traceId: string; // hex (gateway converts)
   coverage?: CoverageJson;
   timings?: TimingsJson;
+  visitedTotal?: string; // proto3 JSON encodes uint64 as string
 }
 
 export type SpanKindName =

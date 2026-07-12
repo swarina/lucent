@@ -10,6 +10,7 @@ export function ResultsPanel() {
   const queryError = useLucent((s) => s.queryError);
   const setHover = useLucent((s) => s.setHover);
   const hover = useLucent((s) => s.hover);
+  const openInspector = useLucent((s) => s.openInspector);
 
   if (queryState === "error") {
     return (
@@ -33,6 +34,7 @@ export function ResultsPanel() {
   const answered = cov.answered ?? 0;
   const degraded = answered < probed;
   const totalMs = Number(lastResponse.timings?.totalUs ?? 0) / 1000;
+  const visited = Number(lastResponse.visitedTotal ?? 0);
 
   return (
     <aside className="results">
@@ -41,6 +43,13 @@ export function ResultsPanel() {
         {degraded && ` — shard${(cov.missingShards ?? []).length > 1 ? "s" : ""} ${(cov.missingShards ?? []).join(", ")} did not respond; results may be incomplete`}
         <span className="mono"> · {totalMs.toFixed(1)}ms</span>
       </div>
+      <button
+        className="inspect-btn"
+        onClick={() => openInspector(lastResponse.traceId)}
+        title="watch the per-shard HNSW traversal in 3D"
+      >
+        ▸ watch it think{visited > 0 ? ` — ${visited.toLocaleString()} nodes visited` : ""}
+      </button>
       {results.length === 0 && <div className="placeholder">no results</div>}
       <ol>
         {results.map((h, i) => (

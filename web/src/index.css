@@ -297,3 +297,154 @@ body {
   text-align: right;
   flex-shrink: 0;
 }
+
+/* ---- inspect button ---- */
+.inspect-btn {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--trace-a) 12%, transparent);
+  border: 1px solid var(--trace-a);
+  border-radius: 6px;
+  color: var(--trace-a);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.inspect-btn:hover {
+  background: color-mix(in srgb, var(--trace-a) 20%, transparent);
+}
+
+/* ---- inspector overlay ---- */
+.inspector {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.inspector-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.inspector-bar .spacer {
+  flex: 1;
+}
+
+.shard-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.shard-tabs button,
+.inspector-bar .close {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.shard-tabs button.active {
+  border-color: var(--trace-a);
+  color: var(--trace-a);
+}
+
+.inspector-msg {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.inspector-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.inspector-canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.inspector-hud {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 14px 18px;
+  background: linear-gradient(transparent, rgba(11, 14, 20, 0.85) 40%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.inspector-hud > * {
+  pointer-events: auto;
+}
+
+.hud-counter {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.hud-counter .big {
+  font-size: 1.4rem;
+  color: var(--text);
+}
+
+.hud-counter .dim {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+}
+
+.hud-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.hud-controls button {
+  width: 40px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 6px 0;
+  cursor: pointer;
+}
+
+.hud-controls input[type="range"] {
+  flex: 1;
+  accent-color: var(--trace-a);
+}
+
+.hud-controls select {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  margin-left: 4px;
+}
+
+.hud-dilation {
+  color: var(--trace-a);
+  font-size: 0.78rem;
+  opacity: 0.85;
+}

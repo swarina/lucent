@@ -8,6 +8,7 @@ import { QueryBar } from "./components/QueryBar";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { Stage } from "./components/Stage";
 import { Waterfall } from "./components/Waterfall";
+import { InspectorOverlay } from "./scenes/inspector/InspectorOverlay";
 import { LiveSource } from "./sources/live";
 import { useLucent } from "./state/store";
 
@@ -36,6 +37,7 @@ export function App() {
         <ResultsPanel />
       </div>
       <Waterfall />
+      <InspectorOverlay />
     </div>
   );
 }

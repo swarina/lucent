@@ -36,7 +36,12 @@ interface LucentState {
 
   hover: HoverRef | null;
 
+  /** trace id the 3D inspector is open on, or null (frontend.md §5.2) */
+  inspectorTrace: string | null;
+
   setConnected(c: boolean): void;
+  openInspector(traceId: string): void;
+  closeInspector(): void;
   setCluster(c: ClusterStateJson): void;
   ingestEvents(events: EventJson[]): void;
   queryStarted(): void;
@@ -58,8 +63,11 @@ export const useLucent = create<LucentState>((set) => ({
   queryState: "idle",
   queryError: null,
   hover: null,
+  inspectorTrace: null,
 
   setConnected: (connected) => set({ connected }),
+  openInspector: (inspectorTrace) => set({ inspectorTrace }),
+  closeInspector: () => set({ inspectorTrace: null }),
   setCluster: (cluster) => set({ cluster }),
 
   ingestEvents: (events) =>
