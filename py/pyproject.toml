@@ -5,18 +5,24 @@ description = "Lucent control plane: dev supervisor, ingest, embedding service, 
 requires-python = ">=3.11"
 dependencies = [
   "click>=8.1",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 # Heavier deps land with their tasks to keep the base env fast to sync.
-#   embed  (M0-T6): sentence-transformers, numpy
-#   ingest (M0-T7): numpy, scikit-learn, umap-learn, zstandard, xxhash
-#   bench  (M1-T4): numpy
+#   ingest (M0-T7): scikit-learn, umap-learn, zstandard, xxhash
 # grpcio-tools (M0-T2) bundles protoc + pulls grpcio + protobuf, covering both
 # codegen and the runtime the generated *_pb2_grpc modules import.
+# CI runs `dev` only: embedsvc logic is tested with a fake encoder; the real
+# model (torch + ~90MB download) is verified locally via the `embed` extra.
 dev = [
   "pytest>=8.0",
   "grpcio-tools>=1.60",
+  "numpy>=1.26",
+]
+embed = [
+  "sentence-transformers>=3.0",
+  "grpcio>=1.60",
   "numpy>=1.26",
 ]
 

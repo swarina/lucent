@@ -70,6 +70,19 @@ def record(out: str) -> None:
     _todo("M6-T2")
 
 
+@main.command()
+@click.option("--config", default="cluster.yaml", show_default=True)
+def embedsvc(config: str) -> None:
+    """Run the embedding service (gRPC, blocking). Needs the 'embed' extra."""
+    try:
+        from lucent import embedsvc as svc
+    except ImportError as e:  # sentence-transformers / grpcio absent
+        click.secho(f"missing dependency: {e}", fg="red", err=True)
+        click.echo("install with: uv sync --extra embed", err=True)
+        sys.exit(1)
+    svc.serve(config)
+
+
 @main.group()
 def corpus() -> None:
     """Corpus utilities."""
