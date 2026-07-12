@@ -187,6 +187,18 @@ jobs:
         run: uv --project py run python py/tools/integration_smoke.py
       - name: Bench recall gates (fake vectors, deterministic)
         run: uv --project py run lucent bench --config .lucent/cluster-dev.yaml --queries 100 --ef 16,100 --gate
+      - name: Determinism gate — round A digest
+        run: uv --project py run python py/tools/make_golden.py --digest /tmp/digestA.json
+      - name: Determinism gate — fresh cluster, round B, compare
+        run: |
+          pkill -f "lucent dev" || true; sleep 2
+          pkill -f "lucent-shard|lucent-coord|embedsvc|dist/index.js" || true; sleep 1
+          rm -rf data .lucent
+          uv --project py run lucent dev --shards 2 --fake-embed > /tmp/dev2.log 2>&1 &
+          for i in $(seq 1 60); do grep -q "cluster ready" /tmp/dev2.log && break; sleep 2; done
+          uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
+          uv --project py run python py/tools/make_golden.py --digest /tmp/digestB.json
+          uv --project py run python py/tools/make_golden.py --compare /tmp/digestA.json /tmp/digestB.json
       - name: Dump logs on failure
         if: failure()
         run: cat /tmp/dev.log

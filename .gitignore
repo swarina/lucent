@@ -52,7 +52,6 @@ data/
 bundle/
 bench/results/
 *.bundle
-testdata/golden/**/*.pb
 
 # --- Caches / models (never commit; regenerated locally) ---
 .cache/

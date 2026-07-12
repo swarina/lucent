@@ -1,0 +1,32 @@
+{
+ "schema": 1,
+ "queries": [
+  {
+   "i": 0,
+   "text": "quantum entanglement between photons",
+   "blobs": [
+    "shard-0a",
+    "shard-1a"
+   ],
+   "spans": "trace-0.spans.json"
+  },
+  {
+   "i": 1,
+   "text": "neural networks for image recognition",
+   "blobs": [
+    "shard-0a",
+    "shard-1a"
+   ],
+   "spans": "trace-1.spans.json"
+  },
+  {
+   "i": 2,
+   "text": "prime number distribution",
+   "blobs": [
+    "shard-0a",
+    "shard-1a"
+   ],
+   "spans": "trace-2.spans.json"
+  }
+ ]
+}

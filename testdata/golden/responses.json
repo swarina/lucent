@@ -1,0 +1,173 @@
+[
+ {
+  "text": "quantum entanglement between photons",
+  "response": {
+   "hits": [
+    {
+     "docId": "5902775419155224486",
+     "score": 0.1798771619796753,
+     "title": "Quantization of the Lie bialgebra of string topology",
+     "snippet": "Let M be a smooth, simply-connected, closed oriented manifold, and LM the free loop space of M. Using a Poincare duality model for M, we show that the reduced equivariant homology of LM has the structure of a Lie bialgebra, and we construct a Hopf algebra which quantizes the Lie bialgebra.",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    },
+    {
+     "docId": "15665779114048411159",
+     "score": 0.15199315547943115,
+     "title": "Annotation of Tribolium nuclear receptors reveals an evolutionary overacceleration of a network controlling the ecdysone cascade",
+     "snippet": "The Tribolium genome contains 21 nuclear receptors, representing all of the six known subfamilies. When compared to other species, this first complete set for a Coleoptera reveals a strong conservation of the number and identity of nuclear receptors in holometabolous insects. Two novelties are observed: the atypical NR0 gene knirps is present only in brachyceran flies, while the NR2E6 gene is foun",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    },
+    {
+     "docId": "8591021495968854195",
+     "score": 0.13209271430969238,
+     "title": "The expanding bipolar shell of the helium nova V445 Puppis",
+     "snippet": "From multi-epoch adaptive optics imaging and integral field unit spectroscopy we report the discovery of an expanding and narrowly confined bipolar shell surrounding the helium nova V445 Puppis (Nova Puppis 2000). An equatorial dust disc obscures the nova remnant, and the outflow is characterised by a large polar outflow velocity of 6720 +/- 650 km/s and knots moving at even larger velocities of 8",
+     "nodeId": "shard-0a"
+    },
+    {
+     "docId": "1984517750671001933",
+     "score": 0.13141107559204102,
+     "title": "Parametric internal waves in a compressible fluid",
+     "snippet": "We describe the effect of vibration on a confined volume of fluid which is density stratified due to its compressibility. We show that internal gravity-acoustic waves can be parametrically destabilized by the vibration. The resulting instability is similar to the classic Faraday instability of surface waves, albeit modified by the compressible nature of the fluid. It may be possible to observe exp",
+     "nodeId": "shard-0a"
+    },
+    {
+     "docId": "4245283031769778079",
+     "score": 0.1310679316520691,
+     "title": "A Survey of Attacks, Security Mechanisms and Challenges in Wireless Sensor Networks",
+     "snippet": "Wireless Sensor networks (WSN) is an emerging technology and have great potential to be employed in critical situations like battlefields and commercial applications such as building, traffic surveillance, habitat monitoring and smart homes and many more scenarios. One of the major challenges wireless sensor networks face today is security. While the deployment of sensor nodes in an unattended env",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    }
+   ],
+   "traceId": "3417837ee93bff25d377fddcc88566a8",
+   "coverage": {
+    "probed": 2,
+    "answered": 2
+   },
+   "timings": {
+    "embedUs": "1818",
+    "fanoutUs": "1142",
+    "mergeUs": "10",
+    "totalUs": "2984"
+   },
+   "visitedTotal": "1994"
+  }
+ },
+ {
+  "text": "neural networks for image recognition",
+  "response": {
+   "hits": [
+    {
+     "docId": "13983025695668601352",
+     "score": 0.16293692588806152,
+     "title": "Discrete Cocompact Subgroups of the Five-Dimensional Connected and Simply Connected Nilpotent Lie Groups",
+     "snippet": "The discrete cocompact subgroups of the five-dimensional connected, simply connected nilpotent Lie groups are determined up to isomorphism. Moreover, we prove if $G=N\\times A$ is a connected, simply connected, nilpotent Lie group with an Abelian factor $A$, then every uniform subgroup of $G$ is the direct product of a uniform subgroup of $N$ and ${\\mathbb Z}^r$ where $r=\\dim A$.",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    },
+    {
+     "docId": "12005451269668043503",
+     "score": 0.15718942880630493,
+     "title": "Superconductivity up to 30 K in the vicinity of quantum critical point in BaFe$_{2}$(As$_{1-x}$P$_{x}$)$_{2}$",
+     "snippet": "We report bulk superconductivity induced by an isovalent doping of phosphorus in BaFe$_{2}$(As$_{1-x}$P$_{x}$)$_{2}$. The P-for-As substitution results in shrinkage of lattice, especially for the FeAs block layers. The resistivity anomaly associated with the spin-density-wave (SDW) transition in the undoped compound is gradually suppressed by the P doping. Superconductivity with the maximum $T_c$ ",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    },
+    {
+     "docId": "13137921723889189032",
+     "score": 0.15210705995559692,
+     "title": "Self-similarity and random walks",
+     "snippet": "This is an introductory level survey of some topics from a new branch of fractal analysis -- the theory of self-similar groups. We discuss recent works on random walks on self-similar groups and their applications to the problem of amenability for these groups.",
+     "nodeId": "shard-0a"
+    },
+    {
+     "docId": "16320079014110635592",
+     "score": 0.1505805253982544,
+     "title": "RIOT: I/O-Efficient Numerical Computing without SQL",
+     "snippet": "R is a numerical computing environment that is widely popular for statistical data analysis. Like many such environments, R performs poorly for large datasets whose sizes exceed that of physical memory. We present our vision of RIOT (R with I/O Transparency), a system that makes R programs I/O-efficient in a way transparent to the users. We describe our experience with RIOT-DB, an initial prototyp",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    },
+    {
+     "docId": "2548648954986509818",
+     "score": 0.1498618721961975,
+     "title": "The Jones and Alexander polynomials for singular links",
+     "snippet": "We extend the state models for Jones and Alexander polynomials of classical links to state models of 2-variable polynomials in the case of singular links. Moreover, we extend both of them to polynomials with d+1 variables for long singular knots with exactly d double points. These extensions can detect non-invertibility of long singular knots.",
+     "nodeId": "shard-0a"
+    }
+   ],
+   "traceId": "3bab928cba03f104dbb69bd621b73c24",
+   "coverage": {
+    "probed": 2,
+    "answered": 2
+   },
+   "timings": {
+    "embedUs": "854",
+    "fanoutUs": "930",
+    "mergeUs": "14",
+    "totalUs": "1826"
+   },
+   "visitedTotal": "1986"
+  }
+ },
+ {
+  "text": "prime number distribution",
+  "response": {
+   "hits": [
+    {
+     "docId": "6034360897049859150",
+     "score": 0.19324833154678345,
+     "title": "Reduction algorithm for the NPMLE for the distribution function of bivariate interval censored data",
+     "snippet": "We study computational aspects of the nonparametric maximum likelihood estimator (NPMLE) for the distribution function of bivariate interval censored data. The computation of the NPMLE consists of two steps: a parameter reduction step and an optimization step. In this paper we focus on the reduction step. We introduce two new reduction algorithms: the Tree algorithm and the HeightMap algorithm. Th",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    },
+    {
+     "docId": "17188811001629936101",
+     "score": 0.17997324466705322,
+     "title": "A General formulation for standardization of rates as a method to control confounding by measured and unmeasured disease risk factors",
+     "snippet": "Standardization, a common approach for controlling confounding in population-studies or data from disease registries, is defined to be a weighted average of stratum specific rates. Typically, discussions on the construction of a particular standardized rate regard the strata as fixed, and focus on the considerations that affect the specification of weights. Each year the data from the SEER cancer ",
+     "nodeId": "shard-0a"
+    },
+    {
+     "docId": "3334043298394395105",
+     "score": 0.1631404161453247,
+     "title": "Foundations for a theory of complex matroids",
+     "snippet": "We explore a combinatorial theory of linear dependency in complex space, \"complex matroids\", with foundations analogous to those for oriented matroids. We give multiple equivalent axiomatizations of complex matroids, showing that this theory captures properties of linear dependency, orthogonality, and determinants over C in much the same way that oriented matroids capture the same properties over ",
+     "nodeId": "shard-0a"
+    },
+    {
+     "docId": "9462793560254191007",
+     "score": 0.13988560438156128,
+     "title": "Monte Carlo Simulation and Statistical Analysis of the Effect of Coding Table Specificity on Genetic Information Coding",
+     "snippet": "We present a computer simulation, which is inspired by Penna model, to help understanding the effect of genetic coding tables on population dynamics. To represent populations we used real and artificial gene sequences in this model. We coded these sequences using different amino acid tables in Nature, the standard table as well as the tables which are used by mithocondria and some eukaryotes. Cont",
+     "nodeId": "shard-0a"
+    },
+    {
+     "docId": "1877902439047109492",
+     "score": 0.1325918436050415,
+     "title": "Studentized Processes of U-statistics",
+     "snippet": "A uniform in probability approximation is established for Studentized processes of non degenerate U-statistics of order m greater or equal to 2 in terms of a standard Wiener process. The classical condition that the second moment of kernel of the underlying U-statistic exists is relaxed to having 5/3 moments. Furthermore, the conditional expectation of the kernel is only assumed to be in the domai",
+     "shardId": 1,
+     "nodeId": "shard-1a"
+    }
+   ],
+   "traceId": "34b7dd74ca2756d4df295b3d1978c350",
+   "coverage": {
+    "probed": 2,
+    "answered": 2
+   },
+   "timings": {
+    "embedUs": "1246",
+    "planUs": "1",
+    "fanoutUs": "1276",
+    "mergeUs": "16",
+    "totalUs": "2569"
+   },
+   "visitedTotal": "2014"
+  }
+ }
+]

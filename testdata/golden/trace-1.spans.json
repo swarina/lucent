@@ -1,0 +1,112 @@
+[
+ {
+  "nodeId": "coord-0",
+  "seq": "19",
+  "tMonoNs": "2474193370633000",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_QUERY_RECEIVED",
+   "tStartNs": "2474193370621041",
+   "tEndNs": "2474193370621041",
+   "detailJson": "{\"ef\":100,\"k\":5}"
+  }
+ },
+ {
+  "nodeId": "coord-0",
+  "seq": "20",
+  "tMonoNs": "2474193371493916",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_EMBED",
+   "tStartNs": "2474193370636500",
+   "tEndNs": "2474193371490916",
+   "detailJson": "{\"status\":\"OK\"}"
+  }
+ },
+ {
+  "nodeId": "coord-0",
+  "seq": "21",
+  "tMonoNs": "2474193371500041",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_PLAN",
+   "tStartNs": "2474193371495666",
+   "tEndNs": "2474193371496541",
+   "detailJson": "{\"epoch\":1,\"probe\":2,\"shards\":[0,1]}"
+  }
+ },
+ {
+  "nodeId": "shard-0a",
+  "seq": "20",
+  "tMonoNs": "2474193372210625",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_SHARD_SEARCH",
+   "tStartNs": "2474193371803958",
+   "tEndNs": "2474193372184500",
+   "detailJson": "{\"ef\":100,\"k\":5,\"visited\":992}"
+  }
+ },
+ {
+  "nodeId": "shard-1a",
+  "seq": "20",
+  "tMonoNs": "2474193372231250",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_SHARD_SEARCH",
+   "tStartNs": "2474193371817791",
+   "tEndNs": "2474193372204541",
+   "shardId": 1,
+   "detailJson": "{\"ef\":100,\"k\":5,\"visited\":994}"
+  }
+ },
+ {
+  "nodeId": "coord-0",
+  "seq": "22",
+  "tMonoNs": "2474193372422791",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_SHARD_RPC",
+   "tStartNs": "2474193371537708",
+   "tEndNs": "2474193372379458",
+   "detailJson": "{\"node\":\"shard-0a\",\"status\":\"OK\"}"
+  }
+ },
+ {
+  "nodeId": "coord-0",
+  "seq": "23",
+  "tMonoNs": "2474193372430958",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_SHARD_RPC",
+   "tStartNs": "2474193371555916",
+   "tEndNs": "2474193372379500",
+   "shardId": 1,
+   "detailJson": "{\"node\":\"shard-1a\",\"status\":\"OK\"}"
+  }
+ },
+ {
+  "nodeId": "coord-0",
+  "seq": "24",
+  "tMonoNs": "2474193372446458",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_MERGE",
+   "tStartNs": "2474193372431791",
+   "tEndNs": "2474193372446250",
+   "detailJson": "{}"
+  }
+ },
+ {
+  "nodeId": "coord-0",
+  "seq": "25",
+  "tMonoNs": "2474193372449541",
+  "span": {
+   "traceId": "O6uSjLoD8QTbtpvWIbc8JA==",
+   "kind": "SPAN_QUERY_DONE",
+   "tStartNs": "2474193370621041",
+   "tEndNs": "2474193372447083",
+   "detailJson": "{\"coverage\":\"2/2\",\"k\":5}"
+  }
+ }
+]
