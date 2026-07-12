@@ -7,11 +7,13 @@ add_executable(lucent_common_tests
   config_test.cc
   event_emitter_test.cc
   node_id_test.cc
+  shard_server_test.cc
   shard_storage_test.cc
   spsc_ring_test.cc)
 
 target_link_libraries(lucent_common_tests
-  PRIVATE lucent_common lucent_index nlohmann_json::nlohmann_json
+  PRIVATE lucent_common lucent_index lucent_shard_lib
+          nlohmann_json::nlohmann_json
           lucent_warnings GTest::gtest GTest::gtest_main)
 target_compile_definitions(lucent_common_tests
   PRIVATE LUCENT_REPO_ROOT="${CMAKE_SOURCE_DIR}")

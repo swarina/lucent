@@ -17,6 +17,6 @@ target_link_libraries(lucent-proto-smoke PRIVATE lucent_proto)
 
 add_subdirectory(common)
 add_subdirectory(index)
+add_subdirectory(shard)
 add_subdirectory(tests)
-# add_subdirectory(shard)        M0-T5
 # add_subdirectory(coordinator)  M0-T8
