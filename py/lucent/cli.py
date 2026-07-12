@@ -40,11 +40,15 @@ def main() -> None:
     show_default=True,
 )
 @click.option("--config", default="cluster.yaml", show_default=True)
-def dev(shards: int, replicas: int, partitioning: str, config: str) -> None:
+@click.option("--fake-embed", is_flag=True,
+              help="Use the deterministic no-model encoder (CI / fast dev).")
+def dev(shards: int, replicas: int, partitioning: str, config: str,
+        fake_embed: bool) -> None:
     """Spin up a local multi-process cluster (supervisor, blocking)."""
     from lucent import dev as dev_mod
 
-    sys.exit(dev_mod.run_dev(config, shards, replicas, partitioning))
+    sys.exit(dev_mod.run_dev(config, shards, replicas, partitioning,
+                             fake_embed=fake_embed))
 
 
 @main.command()
@@ -83,7 +87,9 @@ def record(out: str) -> None:
 
 @main.command()
 @click.option("--config", default="cluster.yaml", show_default=True)
-def embedsvc(config: str) -> None:
+@click.option("--fake", is_flag=True,
+              help="Deterministic hash-vector encoder (no model, no torch) — CI/dev.")
+def embedsvc(config: str, fake: bool) -> None:
     """Run the embedding service (gRPC, blocking). Needs the 'embed' extra."""
     try:
         from lucent import embedsvc as svc
@@ -91,7 +97,7 @@ def embedsvc(config: str) -> None:
         click.secho(f"missing dependency: {e}", fg="red", err=True)
         click.echo("install with: uv sync --extra embed", err=True)
         sys.exit(1)
-    svc.serve(config)
+    svc.serve(config, fake=fake)
 
 
 @main.group()

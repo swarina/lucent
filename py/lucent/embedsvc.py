@@ -63,6 +63,29 @@ class MiniLmEncoder:
         ).astype(np.float32)
 
 
+class HashEncoder:
+    """Deterministic torch-free encoder: vector = seeded-RNG(xxh3(text)).
+
+    For CI and fast local dev (`--fake`): same text always maps to the same
+    unit vector, so ingest->query plumbing works end to end; semantic quality
+    is obviously absent and that's fine — this tests distribution, not ML.
+    """
+
+    def __init__(self, dim: int) -> None:
+        self.name = "fake-hash"
+        self.dim = dim
+
+    def encode(self, texts: Sequence[str]) -> np.ndarray:
+        import xxhash
+
+        out = np.empty((len(texts), self.dim), dtype=np.float32)
+        for i, t in enumerate(texts):
+            rng = np.random.default_rng(xxhash.xxh3_64_intdigest(t.encode()))
+            v = rng.standard_normal(self.dim).astype(np.float32)
+            out[i] = v / np.linalg.norm(v)
+        return out
+
+
 class EmbedServicer(embed_pb2_grpc.EmbedServiceServicer):
     def __init__(self, encoder: Encoder) -> None:
         self._encoder = encoder
@@ -112,20 +135,25 @@ def make_server(encoder: Encoder, bind_addr: str) -> tuple[grpc.Server, int]:
     return server, port
 
 
-def serve(config_path: str) -> None:
+def serve(config_path: str, fake: bool = False) -> None:
     """Blocking entrypoint used by `lucent embedsvc` and the supervisor."""
     from lucent import config as config_mod
 
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(name)s] %(message)s")
     cfg = config_mod.load(config_path)
-    cache_dir = str(cfg.paths.cache / "models")
 
-    log.info("loading %s (cache: %s) ...", cfg.model.name, cache_dir)
-    encoder = MiniLmEncoder(cfg.model.name, cache_dir)
-    if encoder.dim != cfg.model.dim:
-        raise RuntimeError(
-            f"model dim {encoder.dim} != config model.dim {cfg.model.dim}"
-        )
+    encoder: Encoder
+    if fake:
+        log.info("FAKE encoder (deterministic hash vectors, dim=%d)", cfg.model.dim)
+        encoder = HashEncoder(cfg.model.dim)
+    else:
+        cache_dir = str(cfg.paths.cache / "models")
+        log.info("loading %s (cache: %s) ...", cfg.model.name, cache_dir)
+        encoder = MiniLmEncoder(cfg.model.name, cache_dir)
+        if encoder.dim != cfg.model.dim:
+            raise RuntimeError(
+                f"model dim {encoder.dim} != config model.dim {cfg.model.dim}"
+            )
     # Warm the encoder before advertising readiness: torch's first encode in a
     # fresh process can take hundreds of ms, which would blow the
     # coordinator's embed deadline on the very first query.

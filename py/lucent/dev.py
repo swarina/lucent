@@ -75,7 +75,8 @@ def find_binary(repo_root: pathlib.Path, name: str, subdir: str) -> str:
 
 
 def build_specs(
-    repo_root: pathlib.Path, config_path: pathlib.Path, cfg, replicas: int
+    repo_root: pathlib.Path, config_path: pathlib.Path, cfg, replicas: int,
+    fake_embed: bool = False,
 ) -> list[ProcSpec]:
     """Process set for the cluster. Replica 'b' processes spawn only when
     replicas=2 (they idle EMPTY until replication lands at M3)."""
@@ -86,10 +87,11 @@ def build_specs(
     if not gateway_js.exists():
         raise FileNotFoundError(f"{gateway_js} missing — run: cd gateway && npm run build")
 
+    embed_argv = [lucent_bin, "embedsvc", "--config", str(config_path)]
+    if fake_embed:
+        embed_argv.append("--fake")
     specs = [
-        ProcSpec("embed-0", "embed",
-                 [lucent_bin, "embedsvc", "--config", str(config_path)],
-                 cfg.ports.embed),
+        ProcSpec("embed-0", "embed", embed_argv, cfg.ports.embed),
         ProcSpec("collector-0", "gateway",
                  ["node", str(gateway_js), "--config", str(config_path),
                   "--web-dist", str(repo_root / "web" / "dist")],
@@ -255,7 +257,8 @@ def make_control_handler(sup: Supervisor):
     return Handler
 
 
-def run_dev(config_path: str, shards: int, replicas: int, partitioning: str) -> int:
+def run_dev(config_path: str, shards: int, replicas: int, partitioning: str,
+            fake_embed: bool = False) -> int:
     """Blocking `lucent dev` entrypoint. Returns exit code."""
     from lucent import config as config_mod
 
@@ -275,7 +278,7 @@ def run_dev(config_path: str, shards: int, replicas: int, partitioning: str) -> 
     derived.write_text(yaml.safe_dump(raw, sort_keys=False))
 
     cfg = config_mod.load(derived)
-    specs = build_specs(repo_root, derived, cfg, replicas)
+    specs = build_specs(repo_root, derived, cfg, replicas, fake_embed=fake_embed)
     sup = Supervisor(specs)
 
     ctl = http.server.ThreadingHTTPServer(
