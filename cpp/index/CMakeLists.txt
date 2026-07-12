@@ -5,6 +5,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 add_library(lucent_index STATIC
   brute_force.cc
+  hnsw.cc
+  hnsw_io.cc
   shard_storage.cc)
 
 target_include_directories(lucent_index PUBLIC ${CMAKE_SOURCE_DIR}/cpp)

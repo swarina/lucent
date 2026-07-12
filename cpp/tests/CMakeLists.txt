@@ -7,6 +7,8 @@ add_executable(lucent_common_tests
   config_test.cc
   coordinator_test.cc
   event_emitter_test.cc
+  hnsw_io_test.cc
+  hnsw_test.cc
   node_id_test.cc
   shard_server_test.cc
   shard_storage_test.cc
