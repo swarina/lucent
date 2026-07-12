@@ -36,7 +36,7 @@ gen_ts() {
   ( cd "$ROOT/gateway" && ./node_modules/.bin/grpc_tools_node_protoc \
       --plugin=protoc-gen-ts_proto=./node_modules/.bin/protoc-gen-ts_proto \
       --ts_proto_out=src/gen \
-      --ts_proto_opt=outputServices=grpc-js,esModuleInterop=true,useOptionals=messages,importSuffix=.js \
+      --ts_proto_opt=outputServices=grpc-js,esModuleInterop=true,useOptionals=messages,importSuffix=.js,forceLong=bigint \
       -I "$PROTO_ROOT" \
       "$PROTO_ROOT"/lucent/v1/*.proto )
   # Generated output is trusted, not hand-maintained: skip type-checking it so our

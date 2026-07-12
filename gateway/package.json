@@ -7,19 +7,26 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "dev": "node --watch dist/index.js",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.11.0",
+    "@fastify/static": "^8.0.0",
+    "fastify": "^5.0.0",
     "long": "^5.2.3",
-    "protobufjs": "^7.3.0"
+    "protobufjs": "^7.3.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.5.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0",
     "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.0",
     "grpc-tools": "^1.12.4",
-    "ts-proto": "^2.2.0"
+    "ts-proto": "^2.2.0",
+    "vitest": "^2.0.0"
   },
-  "$comment": "grpc-tools bundles protoc; ts-proto is the codegen plugin (M0-T2). @grpc/grpc-js, long, protobufjs back the generated TS. Server deps (ws, fastify) land with M0-T9."
+  "$comment": "grpc-tools bundles protoc; ts-proto is the codegen plugin (M0-T2). Server: fastify (REST+static), ws (live events), yaml (cluster.yaml)."
 }
