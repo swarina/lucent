@@ -325,16 +325,24 @@ def write_projections(cfg, vectors, per_shard_rows, method: str, seed: int) -> N
 
     out_dir = cfg.paths.data / "projections"
     out_dir.mkdir(parents=True, exist_ok=True)
+    if method == "umap":
+        try:
+            import umap  # noqa: F401
+        except ImportError:
+            log.warning("umap-learn unavailable (needs Python <=3.12 + numba); "
+                        "falling back to PCA projection")
+            method = "pca"
     for s, rows in enumerate(per_shard_rows):
         if not rows:
             continue
-        shard_vecs = np.asarray(vectors)[rows]
-        if method == "umap":
-            xy = umap_project(shard_vecs, seed=seed ^ s)
-        else:
-            xy = pca_project(shard_vecs)
-        xy.astype("<f4").tofile(out_dir / f"shard-{s}.f32")
-        log.info("projection shard %d: %d points (%s)", s, len(rows), method)
+        try:
+            shard_vecs = np.asarray(vectors)[rows]
+            xy = (umap_project(shard_vecs, seed=seed ^ s) if method == "umap"
+                  else pca_project(shard_vecs))
+            xy.astype("<f4").tofile(out_dir / f"shard-{s}.f32")
+            log.info("projection shard %d: %d points (%s)", s, len(rows), method)
+        except Exception as e:  # projections are a UI nicety — never fail ingest
+            log.warning("projection shard %d skipped: %s", s, e)
 
 
 def make_embed_batch_fn(embed_addr: str, dim: int):
@@ -384,7 +392,10 @@ def run(config_path: str, corpus_path: str, n: int, seed: int | None = None,
     assignments = hash_partition([d["doc_id"] for d in docs], cfg.cluster.shards)
     loaded = load_shards(cfg, docs, vectors, assignments)
     if projection != "none":
-        write_projections(cfg, vectors, loaded.per_shard_rows, projection, seed)
+        try:
+            write_projections(cfg, vectors, loaded.per_shard_rows, projection, seed)
+        except Exception as e:  # never let a UI artifact abort a good ingest
+            log.warning("projections skipped: %s", e)
     write_queries(docs, cfg.paths.data / "queries.json", n=1000, seed=seed)
 
     # Oracle sidecars (bench, M1-T4): row-aligned doc_ids + a manifest tying
