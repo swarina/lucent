@@ -1,6 +1,9 @@
 // REST API (protocol.md §3): browser-facing JSON over the coordinator's gRPC.
 // Errors: HTTP status + {"error":{"code","message"}}.
 
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import * as grpc from "@grpc/grpc-js";
 import type { FastifyInstance } from "fastify";
 
@@ -143,6 +146,29 @@ export function registerRoutes(
           .header("content-type", "application/octet-stream")
           .send(Buffer.from(TraceBlob.encode(blob).finish()));
       });
+    },
+  );
+
+  // Per-shard 2D layout for the inspector point cloud (f32 x,y pairs,
+  // shard-local row order) — an ingest-owned UI artifact (data-formats.md §2).
+  app.get<{ Params: { shardId: string } }>(
+    "/api/projection/:shardId",
+    async (req, reply) => {
+      const id = Number(req.params.shardId);
+      if (!Number.isInteger(id) || id < 0 || id >= config.shards) {
+        return reply.code(400).send({
+          error: { code: "BAD_SHARD", message: `shard id out of range: ${req.params.shardId}` },
+        });
+      }
+      try {
+        const buf = await readFile(
+          path.join(config.dataDir, "projections", `shard-${id}.f32`));
+        return reply.header("content-type", "application/octet-stream").send(buf);
+      } catch {
+        return reply.code(404).send({
+          error: { code: "NO_PROJECTION", message: "ingest has not written projections" },
+        });
+      }
     },
   );
 

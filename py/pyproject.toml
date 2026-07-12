@@ -24,6 +24,7 @@ dev = [
 ingest = [
   "numpy>=1.26",
   "grpcio>=1.60",
+  "umap-learn>=0.5",
 ]
 embed = [
   "sentence-transformers>=3.0",

@@ -140,3 +140,28 @@ def test_write_queries(tmp_path: pathlib.Path) -> None:
         assert q["text"].startswith("Paper ")
     ingest.write_queries(docs, tmp_path / "q2.json", n=10, seed=42)
     assert json.loads((tmp_path / "q2.json").read_text()) == data  # deterministic
+
+
+def test_pca_project_shape_and_determinism() -> None:
+    rng = np.random.default_rng(7)
+    vecs = rng.standard_normal((300, 32)).astype(np.float32)
+    a = ingest.pca_project(vecs)
+    b = ingest.pca_project(vecs)
+    assert a.shape == (300, 2)
+    assert a.dtype == np.float32
+    np.testing.assert_array_equal(a, b)          # deterministic
+    assert np.abs(a).max() <= 1.0 + 1e-6         # normalized to [-1,1]^2
+    assert np.abs(a).max() > 0.5                 # actually spans the box
+
+
+def test_write_projections(tmp_path, monkeypatch) -> None:
+    class Cfg:
+        class paths:
+            data = tmp_path
+    rng = np.random.default_rng(1)
+    vecs = rng.standard_normal((50, 8)).astype(np.float32)
+    rows = [[i for i in range(50) if i % 2 == 0], [i for i in range(50) if i % 2 == 1]]
+    ingest.write_projections(Cfg, vecs, rows, method="pca", seed=42)
+    for s, r in enumerate(rows):
+        data = np.fromfile(tmp_path / "projections" / f"shard-{s}.f32", dtype="<f4")
+        assert data.shape == (len(r) * 2,)

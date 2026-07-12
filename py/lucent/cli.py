@@ -57,7 +57,10 @@ def dev(shards: int, replicas: int, partitioning: str, config: str,
               help="'arxiv' (fetch/cached dump) or a path to a .jsonl/.jsonl.gz")
 @click.option("--n", default=50000, show_default=True, help="Documents to ingest.")
 @click.option("--seed", default=None, type=int, help="Sampling seed (default: index.seed).")
-def ingest(config: str, corpus: str, n: int, seed: int | None) -> None:
+@click.option("--projection", type=click.Choice(["pca", "umap", "none"]),
+              default="pca", show_default=True,
+              help="2D layout for the inspector point cloud (umap = nicer, slower).")
+def ingest(config: str, corpus: str, n: int, seed: int | None, projection: str) -> None:
     """Ingest a corpus into a RUNNING cluster: sample -> embed -> load -> seal."""
     import logging
 
@@ -68,7 +71,7 @@ def ingest(config: str, corpus: str, n: int, seed: int | None) -> None:
     if corpus == "arxiv":
         cfg = config_mod.load(config)
         corpus = str(ingest_mod.fetch_corpus_file(cfg.paths.cache / "corpus"))
-    ingest_mod.run(config, corpus, n=n, seed=seed)
+    ingest_mod.run(config, corpus, n=n, seed=seed, projection=projection)
 
 
 @main.command()

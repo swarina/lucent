@@ -235,6 +235,7 @@ def write_queries(docs: Sequence[dict], out_path: pathlib.Path, n: int, seed: in
 class LoadResult:
     shard_doc_counts: list[int]
     sealed: bool
+    per_shard_rows: list[list[int]] | None = None
 
 
 def load_shards(cfg, docs, vectors, assignments, *, seal: bool = True) -> LoadResult:
@@ -280,7 +281,60 @@ def load_shards(cfg, docs, vectors, assignments, *, seal: bool = True) -> LoadRe
         counts.append(len(per_shard[s]))
         channel.close()
         log.info("shard %d: %d docs%s", s, counts[-1], " (sealed)" if seal else "")
-    return LoadResult(shard_doc_counts=counts, sealed=seal)
+    return LoadResult(shard_doc_counts=counts, sealed=seal, per_shard_rows=per_shard)
+
+
+def pca_project(vectors) -> "object":
+    """Top-2 principal components, normalized to [-1, 1]^2. Deterministic
+    (SVD of the centered matrix; sign fixed by largest-magnitude loading)."""
+    import numpy as np
+
+    x = np.asarray(vectors, dtype=np.float32)
+    x = x - x.mean(axis=0, keepdims=True)
+    _, _, vt = np.linalg.svd(x, full_matrices=False)
+    comps = vt[:2]
+    for i in range(2):  # sign convention -> deterministic orientation
+        j = int(np.abs(comps[i]).argmax())
+        if comps[i, j] < 0:
+            comps[i] = -comps[i]
+    xy = x @ comps.T
+    span = np.abs(xy).max(axis=0)
+    span[span == 0] = 1.0
+    return (xy / span).astype(np.float32)
+
+
+def umap_project(vectors, seed: int) -> "object":
+    """Seeded UMAP (internals.md §3); heavier but topology-preserving."""
+    import numpy as np
+    from umap import UMAP  # imported lazily: numba compile cost
+
+    xy = UMAP(n_neighbors=15, min_dist=0.1, metric="cosine",
+              random_state=seed).fit_transform(np.asarray(vectors))
+    xy = np.asarray(xy, dtype=np.float32)
+    xy -= xy.mean(axis=0, keepdims=True)
+    span = np.abs(xy).max(axis=0)
+    span[span == 0] = 1.0
+    return (xy / span).astype(np.float32)
+
+
+def write_projections(cfg, vectors, per_shard_rows, method: str, seed: int) -> None:
+    """Per-shard 2D layouts -> data/projections/shard-{i}.f32 (row-major
+    n_s x 2, shard-local row order). A UI artifact owned by ingest and served
+    by the gateway — the shard process never reads it (data-formats.md §2)."""
+    import numpy as np
+
+    out_dir = cfg.paths.data / "projections"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for s, rows in enumerate(per_shard_rows):
+        if not rows:
+            continue
+        shard_vecs = np.asarray(vectors)[rows]
+        if method == "umap":
+            xy = umap_project(shard_vecs, seed=seed ^ s)
+        else:
+            xy = pca_project(shard_vecs)
+        xy.astype("<f4").tofile(out_dir / f"shard-{s}.f32")
+        log.info("projection shard %d: %d points (%s)", s, len(rows), method)
 
 
 def make_embed_batch_fn(embed_addr: str, dim: int):
@@ -305,7 +359,8 @@ def make_embed_batch_fn(embed_addr: str, dim: int):
     return fn, info.model
 
 
-def run(config_path: str, corpus_path: str, n: int, seed: int | None = None) -> None:
+def run(config_path: str, corpus_path: str, n: int, seed: int | None = None,
+        projection: str = "pca") -> None:
     """Full pipeline against a running cluster (embedsvc + shard primaries)."""
     from lucent import config as config_mod
 
@@ -327,7 +382,9 @@ def run(config_path: str, corpus_path: str, n: int, seed: int | None = None) -> 
     log.info("embedded (corpus_hash=%s); partitioning + loading ...", chash)
 
     assignments = hash_partition([d["doc_id"] for d in docs], cfg.cluster.shards)
-    load_shards(cfg, docs, vectors, assignments)
+    loaded = load_shards(cfg, docs, vectors, assignments)
+    if projection != "none":
+        write_projections(cfg, vectors, loaded.per_shard_rows, projection, seed)
     write_queries(docs, cfg.paths.data / "queries.json", n=1000, seed=seed)
 
     # Oracle sidecars (bench, M1-T4): row-aligned doc_ids + a manifest tying
