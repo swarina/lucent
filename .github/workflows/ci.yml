@@ -10,22 +10,24 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# C++ jobs share these: GH runners have ~14GB free and gRPC's buildtrees
+# C++ dependency strategy. GH runners have ~14GB free and gRPC's buildtrees
 # exceed that, so we (a) drop preinstalled bloat, (b) build deps release-only
-# via a custom triplet, (c) clean buildtrees after each port, (d) build deps
-# once in `cpp` and let asan/integration restore from the binary cache.
+# via a custom triplet, (c) clean buildtrees after each port. For the binary
+# cache we use actions/cache on vcpkg's archive dir — NOT vcpkg's x-gha
+# backend, which silently no-ops against GitHub's current cache service.
+# `cpp` builds deps once and saves the archive cache; asan/integration
+# `needs: cpp` so they restore prebuilt archives (fast configure).
 env:
   VCPKG_FLAGS: >-
     -DVCPKG_TARGET_TRIPLET=x64-linux-rel
     -DVCPKG_OVERLAY_TRIPLETS=triplets
     -DVCPKG_INSTALL_OPTIONS=--clean-after-build
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-archives
 
 jobs:
   cpp:
     name: cpp (proto + build + smoke + test)
     runs-on: ubuntu-latest
-    env:
-      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,17 +36,18 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h / | tail -1
-      - name: Export GitHub Actions cache env for vcpkg
-        uses: actions/github-script@v7
+      - name: vcpkg archive cache
+        uses: actions/cache@v4
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          # vcpkg.json carries builtin-baseline, so its hash captures both our
+          # dep list and the pinned vcpkg version.
+          key: vcpkg-x64-linux-rel-${{ hashFiles('vcpkg.json') }}
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config
       - name: Bootstrap vcpkg
-        run: ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-      - name: Configure (builds deps via vcpkg; cached after first success)
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" && ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Configure (builds deps once; restored from archive cache after)
         run: cmake --preset dev $VCPKG_FLAGS
       - name: Build
         run: cmake --build --preset dev
@@ -113,25 +116,22 @@ jobs:
   asan:
     name: cpp asan/ubsan
     runs-on: ubuntu-latest
-    needs: cpp  # deps restored from the cache `cpp` populated
-    env:
-      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+    needs: cpp  # archive cache is warm (saved by cpp) → fast configure
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Free runner disk
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-      - name: Export GitHub Actions cache env for vcpkg
-        uses: actions/github-script@v7
+      - name: vcpkg archive cache
+        uses: actions/cache@v4
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-x64-linux-rel-${{ hashFiles('vcpkg.json') }}
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config
       - name: Bootstrap vcpkg
-        run: ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" && ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
       - name: Configure + build (asan preset)
         run: cmake --preset asan $VCPKG_FLAGS && cmake --build --preset asan
       - name: Test under ASan/UBSan
@@ -140,21 +140,18 @@ jobs:
   integration:
     name: integration (steel-thread smoke)
     runs-on: ubuntu-latest
-    needs: cpp  # deps restored from the cache `cpp` populated
-    env:
-      VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+    needs: cpp  # archive cache is warm (saved by cpp) → fast configure
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Free runner disk
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-      - name: Export GitHub Actions cache env for vcpkg
-        uses: actions/github-script@v7
+      - name: vcpkg archive cache
+        uses: actions/cache@v4
         with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-x64-linux-rel-${{ hashFiles('vcpkg.json') }}
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config
       - uses: actions/setup-node@v4
@@ -163,8 +160,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
       - name: Bootstrap vcpkg
-        run: ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
-      - name: Build C++ (cache-restored)
+        run: mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" && ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+      - name: Build C++ (deps restored from archive cache)
         run: cmake --preset dev $VCPKG_FLAGS && cmake --build --preset dev
       - name: Build gateway + web
         run: |
