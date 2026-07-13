@@ -47,13 +47,32 @@ export interface SpanJson {
   detailJson?: string;
 }
 
+export interface NodeStatsJson {
+  rssBytes?: string;
+  docCount?: string;
+  qps1s?: number;
+  p50Us?: string;
+  p99Us?: string;
+  edgeCount?: string;
+  state?: string;
+  heartbeatMisses?: number;
+}
+
+export interface BuildProgressJson {
+  inserted?: string;
+  total?: string;
+  edgeCount?: string;
+  rssBytes?: string;
+}
+
 export interface EventJson {
   nodeId: string;
   seq?: string;
   tMonoNs?: string;
   span?: SpanJson;
-  stats?: { rssBytes?: string; docCount?: string; qps1s?: number; state?: string };
+  stats?: NodeStatsJson;
   state?: { from?: string; to?: string; reason?: string };
+  build?: BuildProgressJson;
 }
 
 export interface ShardMapEntryJson {

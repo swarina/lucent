@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo } from "react";
 
+import { ClusterPanel } from "./components/ClusterPanel";
 import { QueryBar } from "./components/QueryBar";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { Stage } from "./components/Stage";
@@ -37,6 +38,7 @@ export function App() {
         <ResultsPanel />
       </div>
       <Waterfall />
+      <ClusterPanel />
       <InspectorOverlay />
     </div>
   );

@@ -8,9 +8,20 @@ import {
   ClusterStateJson,
   EventJson,
   HitJson,
+  NodeStatsJson,
   QueryResponseJson,
   SpanJson,
 } from "../types";
+
+export interface NodeLive {
+  stats: NodeStatsJson | null;
+  /** rolling RSS samples (bytes) for a sparkline, newest last */
+  rssHistory: number[];
+  build: { inserted: number; total: number; edgeCount: number; rssBytes: number } | null;
+  state: string | null; // last NodeStateChange 'to'
+}
+
+const RSS_HISTORY = 60;
 
 export interface HoverRef {
   kind: "span" | "stageNode";
@@ -36,12 +47,17 @@ interface LucentState {
 
   hover: HoverRef | null;
 
+  /** live per-node stats/build (metrics + cluster topics) */
+  nodes: Map<string, NodeLive>;
+  clusterOpen: boolean;
+
   /** trace id the 3D inspector is open on, or null (frontend.md §5.2) */
   inspectorTrace: string | null;
 
   setConnected(c: boolean): void;
   openInspector(traceId: string): void;
   closeInspector(): void;
+  setClusterOpen(open: boolean): void;
   setCluster(c: ClusterStateJson): void;
   ingestEvents(events: EventJson[]): void;
   queryStarted(): void;
@@ -63,31 +79,63 @@ export const useLucent = create<LucentState>((set) => ({
   queryState: "idle",
   queryError: null,
   hover: null,
+  nodes: new Map(),
+  clusterOpen: false,
   inspectorTrace: null,
 
   setConnected: (connected) => set({ connected }),
   openInspector: (inspectorTrace) => set({ inspectorTrace }),
   closeInspector: () => set({ inspectorTrace: null }),
+  setClusterOpen: (clusterOpen) => set({ clusterOpen }),
   setCluster: (cluster) => set({ cluster }),
 
   ingestEvents: (events) =>
     set((state) => {
       const spansByTrace = new Map(state.spansByTrace);
       const lastActivity = new Map(state.lastActivity);
+      const nodes = new Map(state.nodes);
       const now = performance.now();
+
+      const live = (id: string): NodeLive =>
+        nodes.get(id) ?? { stats: null, rssHistory: [], build: null, state: null };
+
       for (const e of events) {
         lastActivity.set(e.nodeId, now);
         if (e.span) {
           const spans = spansByTrace.get(e.span.traceId) ?? [];
           spansByTrace.set(e.span.traceId, [...spans, e.span]);
         }
+        if (e.stats) {
+          const n = { ...live(e.nodeId) };
+          n.stats = e.stats;
+          const rss = Number(e.stats.rssBytes ?? 0);
+          n.rssHistory = [...n.rssHistory, rss].slice(-RSS_HISTORY);
+          if (e.stats.state) n.state = e.stats.state;
+          nodes.set(e.nodeId, n);
+        }
+        if (e.build) {
+          const n = { ...live(e.nodeId) };
+          n.build = {
+            inserted: Number(e.build.inserted ?? 0),
+            total: Number(e.build.total ?? 0),
+            edgeCount: Number(e.build.edgeCount ?? 0),
+            rssBytes: Number(e.build.rssBytes ?? 0),
+          };
+          nodes.set(e.nodeId, n);
+        }
+        if (e.state?.to) {
+          const n = { ...live(e.nodeId) };
+          n.state = e.state.to;
+          // build finished — clear the transient progress once serving
+          if (e.state.to === "NODE_STATE_SERVING") n.build = null;
+          nodes.set(e.nodeId, n);
+        }
       }
-      // Bound retained traces (oldest-first eviction by insertion order).
       while (spansByTrace.size > MAX_TRACES) {
         const oldest = spansByTrace.keys().next().value as string;
         spansByTrace.delete(oldest);
       }
-      return { spansByTrace, lastActivity };
+      return { spansByTrace, lastActivity, nodes };
     }),
 
   queryStarted: () => set({ queryState: "inflight", queryError: null }),

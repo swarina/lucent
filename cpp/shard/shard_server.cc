@@ -497,6 +497,9 @@ void ShardServer::EmitStats() {
   stats->set_primary_seq(applied_seq_.load());
   stats->set_applied_seq(applied_seq_.load());
   stats->set_state(state_.load());
+  if (const auto* hnsw = dynamic_cast<const HnswIndex*>(index_.get())) {
+    stats->set_edge_count(hnsw->EdgeCount());  // "watch edges" in steady state
+  }
   emitter_->Emit(std::move(e));
 }
 

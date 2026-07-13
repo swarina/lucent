@@ -8,6 +8,9 @@ export function QueryBar({ source }: { source: LiveSource }) {
   const [k, setK] = useState(10);
   const queryState = useLucent((s) => s.queryState);
   const connected = useLucent((s) => s.connected);
+  const setClusterOpen = useLucent((s) => s.setClusterOpen);
+  const clusterOpen = useLucent((s) => s.clusterOpen);
+  const nodeCount = useLucent((s) => s.nodes.size);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -43,6 +46,14 @@ export function QueryBar({ source }: { source: LiveSource }) {
       </label>
       <button type="submit" disabled={queryState === "inflight"}>
         {queryState === "inflight" ? "…" : "search"}
+      </button>
+      <button
+        type="button"
+        className={`cluster-toggle ${clusterOpen ? "active" : ""}`}
+        onClick={() => setClusterOpen(!clusterOpen)}
+        title="live cluster: memory, edges, build progress"
+      >
+        cluster{nodeCount > 0 ? ` ${nodeCount}` : ""}
       </button>
       <span
         className={`conn ${connected ? "ok" : "down"}`}
