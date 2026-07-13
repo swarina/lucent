@@ -4,8 +4,9 @@
     {
       "name": "lucent-dev",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["--project", "py", "run", "lucent", "dev", "--shards", "2"],
-      "port": 8080
+      "runtimeArgs": ["--project", "py", "run", "lucent", "dev", "--shards", "2", "--fake-embed"],
+      "port": 8080,
+      "autoPort": false
     }
   ]
 }

@@ -24,6 +24,11 @@ dev = [
 ingest = [
   "numpy>=1.26",
   "grpcio>=1.60",
+]
+# UMAP is an opt-in projection (PCA is the default + fallback). Kept OUT of
+# `ingest` because its numba/llvmlite chain won't resolve on newer Pythons —
+# install only on Python <=3.12: `uv sync --extra umap`.
+umap = [
   "umap-learn>=0.5",
 ]
 embed = [

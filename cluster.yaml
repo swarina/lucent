@@ -12,7 +12,7 @@ model:
   metric: ip_normalized
 
 ports:
-  coordinator: 7000
+  coordinator: 7002        # 7000 is taken by macOS AirPlay/ControlCenter
   embed: 7001
   collector: 7010
   gateway_http: 8080

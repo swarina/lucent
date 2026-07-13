@@ -418,6 +418,8 @@ ingest = [
     { name = "grpcio" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+umap = [
     { name = "umap-learn" },
 ]
 
@@ -433,10 +435,10 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sentence-transformers", marker = "extra == 'embed'", specifier = ">=3.0" },
-    { name = "umap-learn", marker = "extra == 'ingest'", specifier = ">=0.5" },
+    { name = "umap-learn", marker = "extra == 'umap'", specifier = ">=0.5" },
     { name = "xxhash", specifier = ">=3.4" },
 ]
-provides-extras = ["dev", "ingest", "embed"]
+provides-extras = ["dev", "ingest", "umap", "embed"]
 
 [[package]]
 name = "markdown-it-py"
