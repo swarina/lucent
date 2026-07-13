@@ -342,5 +342,172 @@ TEST_F(CoordinatorQueryTest, EmptyTextRejected) {
             grpc::StatusCode::INVALID_ARGUMENT);
 }
 
+// ---------- Failover (M3-T2/T3) ----------
+//
+// Shard 0 has a primary (shard-0a) AND a backup (shard-0b) serving distinct
+// doc ids so we can tell which replica answered. The HealthWatcher thread is
+// suppressed (replicas=1) so SetHealthForTest is the *only* thing that moves
+// health — the test is fully deterministic, no ping races.
+class CoordinatorFailoverTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    config_ = Config::Load(std::string(LUCENT_REPO_ROOT) + "/cluster.yaml");
+    config_.cluster.shards = 2;
+    config_.model.dim = 4;
+    config_.cluster.replicas = 1;  // suppress background HealthWatcher thread
+
+    embed_ = std::make_unique<FakeEmbed>(4);
+    shard0a_ = std::make_unique<FakeShard>(
+        "shard-0a", std::vector<std::pair<uint64_t, float>>{{1, 0.90F}});
+    shard0b_ = std::make_unique<FakeShard>(
+        "shard-0b", std::vector<std::pair<uint64_t, float>>{{5, 0.95F}});
+    shard1_ = std::make_unique<FakeShard>(
+        "shard-1a", std::vector<std::pair<uint64_t, float>>{{3, 0.70F}});
+    embed_srv_ = Bind(embed_.get());
+    shard0a_srv_ = Bind(shard0a_.get());
+    shard0b_srv_ = Bind(shard0b_.get());
+    shard1_srv_ = Bind(shard1_.get());
+
+    pb::ShardMap map;
+    map.set_epoch(1);
+    map.set_partitioning("hash");
+    auto* e0 = map.add_shards();
+    e0->set_shard_id(0);
+    e0->set_primary_node("shard-0a");
+    e0->set_primary_addr("127.0.0.1:" + std::to_string(shard0a_srv_.port));
+    e0->set_primary_state(pb::NODE_STATE_SERVING);
+    e0->set_backup_node("shard-0b");
+    e0->set_backup_addr("127.0.0.1:" + std::to_string(shard0b_srv_.port));
+    e0->set_backup_state(pb::NODE_STATE_SERVING);
+    auto* e1 = map.add_shards();
+    e1->set_shard_id(1);
+    e1->set_primary_node("shard-1a");
+    e1->set_primary_addr("127.0.0.1:" + std::to_string(shard1_srv_.port));
+    e1->set_primary_state(pb::NODE_STATE_SERVING);
+
+    emitter_ = std::make_unique<EventEmitter>(
+        "coord-0", [this](std::vector<pb::Event>&& batch) {
+          std::lock_guard<std::mutex> lock(events_mu_);
+          for (auto& e : batch) events_.push_back(std::move(e));
+        });
+    coord_ = std::make_unique<CoordinatorServer>(
+        config_, map, "127.0.0.1:" + std::to_string(embed_srv_.port),
+        emitter_.get());
+    coord_srv_ = Bind(coord_.get());
+    stub_ = pb::CoordinatorService::NewStub(
+        grpc::CreateChannel("127.0.0.1:" + std::to_string(coord_srv_.port),
+                            grpc::InsecureChannelCredentials()));
+  }
+
+  void TearDown() override {
+    for (auto* s : {&coord_srv_, &embed_srv_, &shard0a_srv_, &shard0b_srv_,
+                    &shard1_srv_}) {
+      if (s->server) s->server->Shutdown();
+    }
+    emitter_->Stop();
+  }
+
+  pb::QueryResponse Query() {
+    grpc::ClientContext ctx;
+    pb::QueryRequest req;
+    req.set_text("test query");
+    req.set_k(3);
+    pb::QueryResponse resp;
+    const grpc::Status st = stub_->Query(&ctx, req, &resp);
+    EXPECT_TRUE(st.ok()) << st.error_message();
+    return resp;
+  }
+
+  std::set<uint64_t> DocIds(const pb::QueryResponse& r) {
+    std::set<uint64_t> ids;
+    for (const auto& h : r.hits()) ids.insert(h.doc_id());
+    return ids;
+  }
+
+  std::vector<pb::Event> Failovers() {
+    emitter_->Flush();
+    std::lock_guard<std::mutex> lock(events_mu_);
+    std::vector<pb::Event> out;
+    for (const auto& e : events_) {
+      if (e.has_failover()) out.push_back(e);
+    }
+    return out;
+  }
+
+  pb::ClusterState ClusterState() {
+    grpc::ClientContext ctx;
+    pb::ClusterState resp;
+    EXPECT_TRUE(
+        stub_->GetClusterState(&ctx, pb::ClusterStateRequest{}, &resp).ok());
+    return resp;
+  }
+
+  Config config_{};
+  std::unique_ptr<FakeEmbed> embed_;
+  std::unique_ptr<FakeShard> shard0a_, shard0b_, shard1_;
+  BoundService embed_srv_, shard0a_srv_, shard0b_srv_, shard1_srv_, coord_srv_;
+  std::mutex events_mu_;
+  std::vector<pb::Event> events_;
+  std::unique_ptr<EventEmitter> emitter_;
+  std::unique_ptr<CoordinatorServer> coord_;
+  std::unique_ptr<pb::CoordinatorService::Stub> stub_;
+};
+
+TEST_F(CoordinatorFailoverTest, PrimaryDownPromotesBackupAndRoutesToIt) {
+  // Baseline: shard 0 served by its primary (doc 1), not the backup (doc 5).
+  {
+    const auto ids = DocIds(Query());
+    EXPECT_TRUE(ids.count(1) != 0) << "primary should have answered";
+    EXPECT_TRUE(ids.count(5) == 0) << "backup should be idle before failover";
+  }
+
+  // Kill the primary → HealthWatcher verdict DOWN triggers promotion.
+  coord_->SetHealthForTest("shard-0a", pb::HEALTH_DOWN);
+
+  // A FailoverExecuted event fired: shard 0, 0a -> 0b, epoch bumped.
+  const auto fos = Failovers();
+  ASSERT_EQ(fos.size(), 1u);
+  EXPECT_EQ(fos[0].failover().shard_id(), 0u);
+  EXPECT_EQ(fos[0].failover().old_primary(), "shard-0a");
+  EXPECT_EQ(fos[0].failover().new_primary(), "shard-0b");
+  EXPECT_EQ(fos[0].failover().new_epoch(), 2u);
+
+  // Reads now land on the promoted backup (doc 5), and coverage is still full.
+  const auto resp = Query();
+  const auto ids = DocIds(resp);
+  EXPECT_TRUE(ids.count(5) != 0) << "promoted backup should answer";
+  EXPECT_TRUE(ids.count(1) == 0) << "dead primary must not answer";
+  EXPECT_EQ(resp.coverage().answered(), 2u);
+  EXPECT_EQ(resp.coverage().missing_shards_size(), 0);
+
+  // GetClusterState reports the dead node DOWN and the new epoch.
+  const auto cs = ClusterState();
+  EXPECT_EQ(cs.shard_map().epoch(), 2u);
+  bool saw_down = false;
+  for (const auto& n : cs.nodes()) {
+    if (n.node_id() == "shard-0a") {
+      EXPECT_EQ(n.health(), pb::HEALTH_DOWN);
+      saw_down = true;
+    }
+  }
+  EXPECT_TRUE(saw_down);
+}
+
+TEST_F(CoordinatorFailoverTest, AllReplicasDownBecomesUncoveredNotError) {
+  // Primary down → promote backup; then backup down too → no healthy replica.
+  coord_->SetHealthForTest("shard-0a", pb::HEALTH_DOWN);  // 0b promoted
+  coord_->SetHealthForTest("shard-0b", pb::HEALTH_DOWN);  // 0b (now primary) dies
+
+  const auto resp = Query();
+  // Shard 0 has no healthy replica: it's probed-but-missing, shard 1 still answers.
+  EXPECT_EQ(resp.coverage().probed(), 2u);
+  EXPECT_EQ(resp.coverage().answered(), 1u);
+  ASSERT_EQ(resp.coverage().missing_shards_size(), 1);
+  EXPECT_EQ(resp.coverage().missing_shards(0), 0u);
+  const auto ids = DocIds(resp);
+  EXPECT_TRUE(ids.count(3) != 0) << "shard 1 still serves";
+  EXPECT_TRUE(ids.count(1) == 0 && ids.count(5) == 0) << "shard 0 fully down";
+}
+
 }  // namespace
 }  // namespace lucent

@@ -21,8 +21,9 @@ struct PlannedShard {
 };
 
 struct QueryPlan {
-  std::vector<PlannedShard> probe;      // shards to query
+  std::vector<PlannedShard> probe;      // shards to query (with chosen replica)
   std::vector<uint32_t> unprobed;       // skipped by the probe knob
+  std::vector<uint32_t> uncovered;      // probed but no healthy replica (M3)
   uint64_t epoch = 0;
 };
 

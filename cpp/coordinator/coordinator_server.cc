@@ -59,11 +59,118 @@ CoordinatorServer::CoordinatorServer(Config config,
                                      std::string embed_addr,
                                      EventEmitter* emitter)
     : config_(std::move(config)),
-      shard_map_(std::move(shard_map)),
       emitter_(emitter),
+      shard_map_(std::move(shard_map)),
       rng_(std::random_device{}()) {
   embed_stub_ = lucent::v1::EmbedService::NewStub(
       grpc::CreateChannel(embed_addr, grpc::InsecureChannelCredentials()));
+  // Start the HealthWatcher only when there is something to fail over to
+  // (replicas == 2); with a single replica per shard it would just add pings.
+  if (config_.cluster.replicas >= 2) {
+    health_thread_ = std::thread([this] { HealthLoop(); });
+  }
+}
+
+CoordinatorServer::~CoordinatorServer() {
+  health_stop_.store(true);
+  if (health_thread_.joinable()) health_thread_.join();
+}
+
+void CoordinatorServer::HealthLoop() {
+  while (!health_stop_.load()) {
+    HealthTick();
+    // Sleep in small slices so shutdown is prompt.
+    for (int i = 0; i < config_.health.heartbeat_ms / 20 &&
+                    !health_stop_.load(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  }
+}
+
+void CoordinatorServer::HealthTick() {
+  // Snapshot the node list under the lock, ping outside it, then apply.
+  std::vector<std::pair<std::string, std::string>> nodes;  // (node_id, addr)
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    for (const auto& e : shard_map_.shards()) {
+      nodes.emplace_back(e.primary_node(), e.primary_addr());
+      if (!e.backup_node().empty()) nodes.emplace_back(e.backup_node(), e.backup_addr());
+    }
+  }
+  for (const auto& [node_id, addr] : nodes) {
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() +
+                     std::chrono::milliseconds(300));
+    lucent::v1::StatusResponse resp;
+    const bool alive =
+        ShardStub(addr)->Status(&ctx, lucent::v1::StatusRequest{}, &resp).ok();
+    std::lock_guard<std::mutex> lock(map_mu_);
+    RecordHealth(node_id, alive);
+  }
+}
+
+bool CoordinatorServer::IsHealthy(const std::string& node_id) const {
+  auto it = health_.find(node_id);
+  return it == health_.end() || it->second.state == lucent::v1::HEALTH_HEALTHY;
+}
+
+void CoordinatorServer::RecordHealth(const std::string& node_id, bool alive) {
+  NodeHealth& h = health_[node_id];
+  const auto prev = h.state;
+  if (alive) {
+    h.misses = 0;
+    h.state = lucent::v1::HEALTH_HEALTHY;
+  } else {
+    ++h.misses;
+    if (h.misses >= config_.health.down_after_misses) {
+      h.state = lucent::v1::HEALTH_DOWN;
+    } else if (h.misses >= config_.health.suspect_after_misses) {
+      h.state = lucent::v1::HEALTH_SUSPECT;
+    }
+  }
+  if (h.state == prev) return;
+  spdlog::info("health: {} {} (misses {})", node_id,
+               lucent::v1::HealthState_Name(h.state), h.misses);
+  if (h.state == lucent::v1::HEALTH_DOWN) MaybeFailover(node_id);
+}
+
+// A primary going DOWN with a healthy backup hands the shard over: swap roles,
+// bump the map epoch, emit FailoverExecuted. Caller holds map_mu_.
+void CoordinatorServer::MaybeFailover(const std::string& down_node) {
+  for (auto& e : *shard_map_.mutable_shards()) {
+    if (e.primary_node() != down_node) continue;
+    if (e.backup_node().empty() || !IsHealthy(e.backup_node())) return;
+    const std::string old_primary = e.primary_node();
+    const std::string old_paddr = e.primary_addr();
+    e.set_primary_node(e.backup_node());
+    e.set_primary_addr(e.backup_addr());
+    e.set_backup_node(old_primary);
+    e.set_backup_addr(old_paddr);
+    shard_map_.set_epoch(shard_map_.epoch() + 1);
+    spdlog::warn("FAILOVER shard {}: {} -> {} (epoch {})", e.shard_id(),
+                 old_primary, e.primary_node(), shard_map_.epoch());
+    if (emitter_ != nullptr) {
+      lucent::v1::Event ev;
+      auto* f = ev.mutable_failover();
+      f->set_shard_id(e.shard_id());
+      f->set_old_primary(old_primary);
+      f->set_new_primary(e.primary_node());
+      f->set_new_epoch(shard_map_.epoch());
+      emitter_->Emit(std::move(ev));
+    }
+    return;
+  }
+}
+
+void CoordinatorServer::SetHealthForTest(const std::string& node_id,
+                                         lucent::v1::HealthState state) {
+  std::lock_guard<std::mutex> lock(map_mu_);
+  NodeHealth& h = health_[node_id];
+  h.state = state;
+  h.misses = state == lucent::v1::HEALTH_DOWN      ? config_.health.down_after_misses
+             : state == lucent::v1::HEALTH_SUSPECT ? config_.health.suspect_after_misses
+                                                   : 0;
+  if (state == lucent::v1::HEALTH_DOWN) MaybeFailover(node_id);
 }
 
 lucent::v1::ShardService::Stub* CoordinatorServer::ShardStub(
@@ -109,6 +216,43 @@ void CoordinatorServer::EmitSpan(const std::string& trace_id,
   emitter_->Emit(std::move(e));
 }
 
+// Health-aware planning: apply the probe knob (lowest shard_ids), then pick a
+// HEALTHY, SERVING replica per shard, round-robin across {primary, backup} for
+// read load-balancing. A shard with no healthy replica is `uncovered`.
+QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
+  std::lock_guard<std::mutex> lock(map_mu_);
+  QueryPlan plan;
+  plan.epoch = shard_map_.epoch();
+
+  std::vector<const lucent::v1::ShardMapEntry*> entries;
+  for (const auto& e : shard_map_.shards()) entries.push_back(&e);
+  std::sort(entries.begin(), entries.end(),
+            [](const auto* a, const auto* b) { return a->shard_id() < b->shard_id(); });
+
+  const size_t want = (probe == 0 || probe >= entries.size()) ? entries.size()
+                                                              : probe;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const auto* e = entries[i];
+    if (i >= want) {
+      plan.unprobed.push_back(e->shard_id());
+      continue;
+    }
+    // Candidate replicas that are healthy (backup may be absent/empty).
+    std::vector<std::pair<std::string, std::string>> reps;  // (node, addr)
+    if (IsHealthy(e->primary_node())) reps.emplace_back(e->primary_node(), e->primary_addr());
+    if (!e->backup_node().empty() && IsHealthy(e->backup_node())) {
+      reps.emplace_back(e->backup_node(), e->backup_addr());
+    }
+    if (reps.empty()) {
+      plan.uncovered.push_back(e->shard_id());
+      continue;
+    }
+    const auto& r = reps[(rr_++) % reps.size()];
+    plan.probe.push_back(PlannedShard{e->shard_id(), r.first, r.second});
+  }
+  return plan;
+}
+
 grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
                                       const lucent::v1::QueryRequest* req,
                                       lucent::v1::QueryResponse* resp) {
@@ -145,9 +289,9 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
     return grpc::Status(grpc::StatusCode::INTERNAL, "embed dim mismatch");
   }
 
-  // --- Plan. ---
+  // --- Plan (health-aware replica selection). ---
   const uint64_t t_plan0 = MonoNanos();
-  const QueryPlan plan = PlanQuery(shard_map_, req->probe());
+  const QueryPlan plan = PlanWithHealth(req->probe());
   const uint64_t t_plan1 = MonoNanos();
   {
     nlohmann::json shards = nlohmann::json::array();
@@ -203,8 +347,16 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
 
   std::vector<ShardResult> answered;
   auto* coverage = resp->mutable_coverage();
-  coverage->set_probed(static_cast<uint32_t>(plan.probe.size()));
+  // "probed" = shards we intended to serve this query: reachable replicas plus
+  // shards whose every replica is down (those are counted below as missing).
+  coverage->set_probed(
+      static_cast<uint32_t>(plan.probe.size() + plan.uncovered.size()));
   for (uint32_t s : plan.unprobed) coverage->add_unprobed_shards(s);
+  // Shards with no healthy replica never got an RPC — they're missing coverage.
+  for (uint32_t s : plan.uncovered) {
+    coverage->add_missing_shards(s);
+    spdlog::warn("shard {}: no healthy replica (failover exhausted)", s);
+  }
   for (auto& c : calls) {
     // Epoch-mismatch retry (protocol.md §2): a shard that knows a higher map
     // epoch rejects with FAILED_PRECONDITION; refresh our epoch and retry once
@@ -212,7 +364,10 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
     // that M3's live shard map plugs into; correctness comes for free now.
     if (c->status.error_code() == grpc::StatusCode::FAILED_PRECONDITION) {
       lucent::v1::SearchRequest rreq = c->req;
-      rreq.set_shard_map_epoch(shard_map_.epoch());
+      {
+        std::lock_guard<std::mutex> lock(map_mu_);
+        rreq.set_shard_map_epoch(shard_map_.epoch());
+      }
       grpc::ClientContext rctx;
       rctx.set_deadline(DeadlineIn(config_.timeouts_ms.shard_search));
       lucent::v1::SearchResponse rresp;
@@ -265,12 +420,24 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
 grpc::Status CoordinatorServer::GetClusterState(
     grpc::ServerContext* /*ctx*/, const lucent::v1::ClusterStateRequest* /*req*/,
     lucent::v1::ClusterState* resp) {
+  std::lock_guard<std::mutex> lock(map_mu_);
   *resp->mutable_shard_map() = shard_map_;
-  // M3's HealthWatcher will report real health; static map == all healthy.
-  for (const auto& e : shard_map_.shards()) {
+  // Report every distinct node (primary + backup) with its live HealthWatcher
+  // verdict. Unseen nodes default to HEALTHY (optimistic, matches IsHealthy).
+  std::unordered_map<std::string, lucent::v1::HealthState> seen;
+  auto add = [&](const std::string& node_id) {
+    if (node_id.empty() || seen.count(node_id) != 0) return;
+    auto it = health_.find(node_id);
+    const lucent::v1::HealthState h =
+        it == health_.end() ? lucent::v1::HEALTH_HEALTHY : it->second.state;
+    seen.emplace(node_id, h);
     auto* nh = resp->add_nodes();
-    nh->set_node_id(e.primary_node());
-    nh->set_health(lucent::v1::HEALTH_HEALTHY);
+    nh->set_node_id(node_id);
+    nh->set_health(h);
+  };
+  for (const auto& e : shard_map_.shards()) {
+    add(e.primary_node());
+    add(e.backup_node());
   }
   return grpc::Status::OK;
 }
