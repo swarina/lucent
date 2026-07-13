@@ -178,6 +178,49 @@ body {
   font-size: 0.9rem;
 }
 
+.loadgen {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.loadgen .lg-toggle {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.loadgen .lg-toggle.on {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.loadgen label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.loadgen input[type="range"] {
+  width: 80px;
+  accent-color: var(--trace-a);
+}
+.loadgen select {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+}
+.loadgen .dim {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
 .cluster-grid {
   padding: 10px;
   overflow-y: auto;

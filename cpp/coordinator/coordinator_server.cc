@@ -3,7 +3,8 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
-#include <future>
+#include <latch>
+#include <memory>
 #include <random>
 #include <utility>
 
@@ -157,52 +158,84 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
                             {"epoch", plan.epoch}}.dump());
   }
 
-  // --- Fan-out (parallel; per-shard deadline; failures become coverage). ---
+  // --- Fan-out (gRPC async callback API; per-shard deadline; failures become
+  // coverage). All N calls are issued without blocking a thread each; the
+  // per-shard deadline guarantees every callback fires, so a latch of N is a
+  // sufficient barrier (no separate overall timeout needed). ---
   const uint64_t t_fan0 = MonoNanos();
-  struct FanoutOutcome {
-    grpc::Status status = grpc::Status::OK;
+  struct Call {
+    PlannedShard target;
+    grpc::ClientContext ctx;
+    lucent::v1::SearchRequest req;
     lucent::v1::SearchResponse resp;
+    grpc::Status status;
     uint64_t t0 = 0, t1 = 0;
   };
-  std::vector<std::future<FanoutOutcome>> futures;
-  futures.reserve(plan.probe.size());
+
+  auto fill = [&](Call& c) {
+    c.req.set_trace_id(trace_id);
+    *c.req.mutable_vector() = eresp.vectors();
+    c.req.set_k(k);
+    c.req.set_ef_search(ef);
+    c.req.set_trace_level(req->trace_level());
+    c.req.set_shard_map_epoch(plan.epoch);
+    c.ctx.set_deadline(DeadlineIn(config_.timeouts_ms.shard_search));
+    c.t0 = MonoNanos();
+  };
+
+  std::vector<std::unique_ptr<Call>> calls;
+  calls.reserve(plan.probe.size());
+  std::latch done(static_cast<std::ptrdiff_t>(plan.probe.size()));
   for (const PlannedShard& target : plan.probe) {
-    futures.push_back(std::async(std::launch::async, [&, target] {
-      FanoutOutcome out;
-      out.t0 = MonoNanos();
-      lucent::v1::SearchRequest sreq;
-      sreq.set_trace_id(trace_id);
-      *sreq.mutable_vector() = eresp.vectors();
-      sreq.set_k(k);
-      sreq.set_ef_search(ef);
-      sreq.set_trace_level(req->trace_level());
-      sreq.set_shard_map_epoch(plan.epoch);
-      grpc::ClientContext sctx;
-      sctx.set_deadline(DeadlineIn(config_.timeouts_ms.shard_search));
-      out.status = ShardStub(target.addr)->Search(&sctx, sreq, &out.resp);
-      out.t1 = MonoNanos();
-      return out;
-    }));
+    auto c = std::make_unique<Call>();
+    c->target = target;
+    fill(*c);
+    Call* cp = c.get();
+    ShardStub(target.addr)->async()->Search(
+        &cp->ctx, &cp->req, &cp->resp, [cp, &done](grpc::Status s) {
+          cp->status = std::move(s);
+          cp->t1 = MonoNanos();
+          done.count_down();
+        });
+    calls.push_back(std::move(c));
   }
+  done.wait();
 
   std::vector<ShardResult> answered;
   auto* coverage = resp->mutable_coverage();
   coverage->set_probed(static_cast<uint32_t>(plan.probe.size()));
   for (uint32_t s : plan.unprobed) coverage->add_unprobed_shards(s);
-  for (size_t i = 0; i < futures.size(); ++i) {
-    FanoutOutcome out = futures[i].get();
-    const PlannedShard& target = plan.probe[i];
-    EmitSpan(trace_id, lucent::v1::SPAN_SHARD_RPC, out.t0, out.t1,
-             target.shard_id,
-             nlohmann::json{{"status", StatusLabel(out.status.error_code())},
-                            {"node", target.node_id}}.dump());
-    if (out.status.ok()) {
-      resp->set_visited_total(resp->visited_total() + out.resp.visited());
-      answered.push_back(ShardResult{target.shard_id, std::move(out.resp)});
+  for (auto& c : calls) {
+    // Epoch-mismatch retry (protocol.md §2): a shard that knows a higher map
+    // epoch rejects with FAILED_PRECONDITION; refresh our epoch and retry once
+    // synchronously. Static map (M0–M2) → same epoch, so this is a no-op path
+    // that M3's live shard map plugs into; correctness comes for free now.
+    if (c->status.error_code() == grpc::StatusCode::FAILED_PRECONDITION) {
+      lucent::v1::SearchRequest rreq = c->req;
+      rreq.set_shard_map_epoch(shard_map_.epoch());
+      grpc::ClientContext rctx;
+      rctx.set_deadline(DeadlineIn(config_.timeouts_ms.shard_search));
+      lucent::v1::SearchResponse rresp;
+      const grpc::Status rs =
+          ShardStub(c->target.addr)->Search(&rctx, rreq, &rresp);
+      c->t1 = MonoNanos();
+      if (rs.ok()) {
+        c->status = rs;
+        c->resp = std::move(rresp);
+      }
+    }
+
+    EmitSpan(trace_id, lucent::v1::SPAN_SHARD_RPC, c->t0, c->t1,
+             c->target.shard_id,
+             nlohmann::json{{"status", StatusLabel(c->status.error_code())},
+                            {"node", c->target.node_id}}.dump());
+    if (c->status.ok()) {
+      resp->set_visited_total(resp->visited_total() + c->resp.visited());
+      answered.push_back(ShardResult{c->target.shard_id, std::move(c->resp)});
     } else {
-      coverage->add_missing_shards(target.shard_id);
-      spdlog::warn("shard {} ({}): {}", target.shard_id, target.node_id,
-                   out.status.error_message());
+      coverage->add_missing_shards(c->target.shard_id);
+      spdlog::warn("shard {} ({}): {}", c->target.shard_id, c->target.node_id,
+                   c->status.error_message());
     }
   }
   coverage->set_answered(static_cast<uint32_t>(answered.size()));

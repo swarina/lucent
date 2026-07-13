@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -52,6 +54,58 @@ TEST(MergeTopK, CapsAtKAndHandlesEmpty) {
   results.push_back({0, Resp("a", {{1, 0.9F}, {2, 0.8F}, {3, 0.7F}})});
   EXPECT_EQ(MergeTopK(results, 2).size(), 2u);
   EXPECT_TRUE(MergeTopK({}, 5).empty());
+}
+
+// Property: merging per-shard top-k lists == the exact top-k of their union
+// (partitions are disjoint, ordered by (score desc, doc_id asc)). This is the
+// scatter-gather correctness contract — internals.md §2.2.
+TEST(MergeTopK, EqualsExactTopKOfUnion) {
+  std::mt19937_64 rng(12345);
+  std::uniform_int_distribution<int> shards_dist(1, 6);
+  std::uniform_int_distribution<int> per_shard(0, 20);
+  std::uniform_int_distribution<uint64_t> id_dist(1, 100000);
+  std::uniform_real_distribution<float> score_dist(0.0F, 1.0F);
+
+  for (int trial = 0; trial < 300; ++trial) {
+    const int nshards = shards_dist(rng);
+    std::vector<ShardResult> results;
+    std::vector<std::pair<float, uint64_t>> all;  // (score, doc_id)
+    std::set<uint64_t> used;                        // keep partitions disjoint
+
+    for (int s = 0; s < nshards; ++s) {
+      std::vector<std::pair<uint64_t, float>> hits;
+      const int m = per_shard(rng);
+      for (int i = 0; i < m; ++i) {
+        uint64_t id = id_dist(rng);
+        while (used.count(id)) id = id_dist(rng);
+        used.insert(id);
+        const float sc = score_dist(rng);
+        hits.emplace_back(id, sc);
+        all.emplace_back(sc, id);
+      }
+      // Each shard returns its own hits sorted desc (as a real shard would).
+      std::sort(hits.begin(), hits.end(),
+                [](auto& a, auto& b) { return a.second > b.second; });
+      results.push_back({static_cast<uint32_t>(s),
+                         Resp("shard-" + std::to_string(s) + "a", hits)});
+    }
+
+    const uint32_t k = 1 + (rng() % 15);
+
+    // Reference: exact top-k of the union by (score desc, doc_id asc).
+    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) {
+      if (a.first != b.first) return a.first > b.first;
+      return a.second < b.second;
+    });
+    if (all.size() > k) all.resize(k);
+
+    const auto merged = MergeTopK(results, k);
+    ASSERT_EQ(merged.size(), all.size()) << "trial " << trial;
+    for (size_t i = 0; i < merged.size(); ++i) {
+      EXPECT_EQ(merged[i].doc_id(), all[i].second) << "trial " << trial << " rank " << i;
+      EXPECT_FLOAT_EQ(merged[i].score(), all[i].first);
+    }
+  }
 }
 
 // ---------- PlanQuery (pure) ----------

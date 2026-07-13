@@ -9,6 +9,7 @@ import type { FastifyInstance } from "fastify";
 
 import type { EventStore } from "./collector.js";
 import type { GatewayConfig } from "./config.js";
+import { LoadGen } from "./loadgen.js";
 import {
   ClusterState,
   ClusterStateRequest,
@@ -219,11 +220,22 @@ export function registerRoutes(
     });
   });
 
-  // Chaos/fault/loadgen/bench land with M0-T11 (supervisor), M2 and M3.
-  for (const path of ["/api/chaos/kill", "/api/chaos/restart", "/api/chaos/spawn", "/api/fault", "/api/loadgen"]) {
-    app.post(path, (_req, reply) => {
+  // Load generator (M2-T5): background SPANS-tier traffic so the stage is alive.
+  const loadgen = new LoadGen(`127.0.0.1:${config.ports.coordinator}`, config.dataDir);
+  app.post<{ Body: { enabled?: boolean; qps?: number; skew?: "uniform" | "zipf" } }>(
+    "/api/loadgen",
+    (req, reply) => {
+      const b = req.body ?? {};
+      void reply.send(loadgen.set(b.enabled ?? false, b.qps, b.skew));
+    },
+  );
+  app.get("/api/loadgen", (_req, reply) => void reply.send(loadgen.status()));
+
+  // Chaos/fault proxy the supervisor + shards (M3-T4).
+  for (const p of ["/api/chaos/kill", "/api/chaos/restart", "/api/chaos/spawn", "/api/fault"]) {
+    app.post(p, (_req, reply) => {
       void reply.code(501).send({
-        error: { code: "NOT_IMPLEMENTED", message: `${path} lands with its roadmap task` },
+        error: { code: "NOT_IMPLEMENTED", message: `${p} lands with M3-T4` },
       });
     });
   }

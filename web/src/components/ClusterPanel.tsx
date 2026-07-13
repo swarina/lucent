@@ -3,6 +3,8 @@
 // events emitted while a shard builds its HNSW — so you literally watch memory
 // and edge counts climb as the index builds.
 
+import { useEffect, useState } from "react";
+
 import { useLucent, NodeLive } from "../state/store";
 
 const SHARD_COLORS = [
@@ -97,6 +99,75 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+// Background traffic control (M2-T5). Poisson arrivals at the coordinator so
+// the stage is alive and shards run hot; SPANS tier, never FULL.
+function LoadGenControl() {
+  const [on, setOn] = useState(false);
+  const [qps, setQps] = useState(10);
+  const [skew, setSkew] = useState<"uniform" | "zipf">("uniform");
+  const [sent, setSent] = useState(0);
+
+  // Reflect the actual backend state on mount (load-gen may already be running).
+  useEffect(() => {
+    void fetch("/api/loadgen")
+      .then((r) => r.json())
+      .then((st) => {
+        setOn(!!st.enabled);
+        if (st.qps) setQps(st.qps);
+        if (st.skew) setSkew(st.skew);
+        setSent(st.sent ?? 0);
+      })
+      .catch(() => {});
+  }, []);
+
+  const push = (enabled: boolean, q = qps, s = skew) =>
+    fetch("/api/loadgen", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled, qps: q, skew: s }),
+    }).then((r) => r.json()).then((st) => setOn(st.enabled));
+
+  // Poll sent count while running (visible proof traffic is flowing).
+  useEffect(() => {
+    if (!on) return;
+    const id = setInterval(() => {
+      void fetch("/api/loadgen").then((r) => r.json()).then((st) => setSent(st.sent));
+    }, 800);
+    return () => clearInterval(id);
+  }, [on]);
+
+  return (
+    <div className="loadgen">
+      <button className={`lg-toggle ${on ? "on" : ""}`} onClick={() => void push(!on)}>
+        load {on ? "on" : "off"}
+      </button>
+      <label className="mono">
+        <input
+          type="range" min={1} max={50} value={qps}
+          onChange={(e) => {
+            const q = Number(e.target.value);
+            setQps(q);
+            if (on) void push(true, q, skew);
+          }}
+        />
+        {qps} qps
+      </label>
+      <select
+        value={skew}
+        onChange={(e) => {
+          const s = e.target.value as "uniform" | "zipf";
+          setSkew(s);
+          if (on) void push(true, qps, s);
+        }}
+      >
+        <option value="uniform">uniform</option>
+        <option value="zipf">zipf (hot)</option>
+      </select>
+      {on && <span className="mono dim">{sent.toLocaleString()} sent</span>}
+    </div>
+  );
+}
+
 export function ClusterPanel() {
   const open = useLucent((s) => s.clusterOpen);
   const close = useLucent((s) => s.setClusterOpen);
@@ -124,6 +195,7 @@ export function ClusterPanel() {
         <div className="spacer" />
         <button className="close" onClick={() => close(false)}>✕</button>
       </div>
+      <LoadGenControl />
       <div className="cluster-grid">
         {entries.length === 0 && (
           <div className="cluster-empty">waiting for node stats…</div>
