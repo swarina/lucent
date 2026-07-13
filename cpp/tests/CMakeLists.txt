@@ -10,6 +10,7 @@ add_executable(lucent_common_tests
   hnsw_io_test.cc
   hnsw_test.cc
   node_id_test.cc
+  replication_test.cc
   shard_server_test.cc
   shard_storage_test.cc
   spsc_ring_test.cc)

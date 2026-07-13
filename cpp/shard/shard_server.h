@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -87,7 +88,28 @@ class ShardServer final : public lucent::v1::ShardService::Service {
   std::vector<uint64_t> staged_ids_;
   std::vector<float> staged_vectors_;
   std::vector<DocMeta> staged_docs_;
-  std::atomic<uint64_t> applied_seq_{0};
+  std::atomic<uint64_t> applied_seq_{0};  // last batch seq this node applied
+
+  // Replication (M3-T1). When replicas==2, the primary (shard-N a) streams its
+  // insert stream to the backup (shard-N b) via Replicate; the backup applies
+  // and acks. Lag = primary_seq_ - backup_applied_seq_ (reported by the
+  // primary). Docs staged identically to ingest — StageDocs is shared.
+  void StageDocs(const lucent::v1::InsertBatchRequest& batch);  // caller holds build_mu_
+  void StartReplicator();
+  void ReplicatorLoop();
+  const bool is_primary_;
+  const bool has_backup_;
+  std::atomic<uint64_t> primary_seq_{0};         // last batch accepted from ingest
+  std::atomic<uint64_t> backup_applied_seq_{0};  // primary's view of backup progress
+  std::mutex oplog_mu_;
+  std::condition_variable oplog_cv_;
+  std::vector<lucent::v1::InsertBatchRequest> oplog_;  // batches awaiting replication
+  std::thread replicator_;
+  std::atomic<bool> replicator_stop_{false};
+  // Active replication client context, so Stop() can TryCancel a blocking
+  // Read/Write on a dead backup (no deadline is set on the long-lived stream).
+  std::mutex repl_ctx_mu_;
+  grpc::ClientContext* repl_ctx_ = nullptr;
 
   // Serving set: written once (Init load or SealIndex), then read-only.
   std::unique_ptr<VectorIndex> index_;

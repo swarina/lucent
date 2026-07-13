@@ -22,7 +22,8 @@ namespace pb = lucent::v1;
 
 Config TestConfig() {
   Config c = Config::Load(std::string(LUCENT_REPO_ROOT) + "/cluster.yaml");
-  c.model.dim = 4;  // tiny vectors for the test
+  c.model.dim = 4;          // tiny vectors for the test
+  c.cluster.replicas = 1;   // single-shard tests: no backup replication
   return c;
 }
 
