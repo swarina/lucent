@@ -221,6 +221,114 @@ body {
   color: var(--text-faint);
 }
 
+/* Chaos block (ops/cluster panel) — node picker + preset command buttons. */
+.chaos-block {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.chaos-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.chaos-block select {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  padding: 3px 6px;
+}
+.chaos-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chaos-btn,
+.chaos-item {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.chaos-btn:hover:not(:disabled),
+.chaos-item:hover {
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+.chaos-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chaos-btn.danger,
+.chaos-item.danger {
+  color: var(--down);
+  border-color: color-mix(in srgb, var(--down) 40%, var(--line));
+}
+.chaos-btn.danger:hover:not(:disabled),
+.chaos-item.danger:hover {
+  border-color: var(--down);
+}
+
+/* Right-click chaos menu, anchored at the cursor in viewport coords. */
+.chaos-menu {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 108px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.chaos-menu-head {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  padding: 2px 6px 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 2px;
+}
+.chaos-menu .chaos-item {
+  text-align: left;
+}
+
+/* Result toast for a fired chaos action. */
+.chaos-toast {
+  position: fixed;
+  z-index: 50;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  font-size: 0.76rem;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--ok);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.chaos-toast.err {
+  border-color: var(--down);
+  color: var(--down);
+}
+
+.stagenode {
+  cursor: context-menu;
+}
+
 .cluster-grid {
   padding: 10px;
   overflow-y: auto;

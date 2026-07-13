@@ -18,6 +18,15 @@ export interface QueryParams {
 
 export type EventHandler = (topic: string, events: EventJson[]) => void;
 
+// Chaos surface (frontend.md §5.3). Process-level chaos (kill/restart) hits the
+// supervisor; in-process faults (pause/slow/drop/clear) hit the shard. `ms`/`p`
+// are only meaningful for the fault kinds.
+export type ChaosCmd =
+  | { kind: "kill" | "restart"; nodeId: string }
+  | { kind: "pause" | "slow"; nodeId: string; ms: number }
+  | { kind: "drop"; nodeId: string; p: number }
+  | { kind: "clear"; nodeId: string };
+
 export class LiveSource {
   private ws: WebSocket | null = null;
   private handlers = new Set<EventHandler>();
@@ -84,5 +93,25 @@ export class LiveSource {
     const resp = await fetch("/api/cluster");
     if (!resp.ok) throw new Error(`cluster state failed (${resp.status})`);
     return (await resp.json()) as ClusterStateJson;
+  }
+
+  async chaos(cmd: ChaosCmd): Promise<{ active?: string }> {
+    const [path, body] =
+      cmd.kind === "kill" || cmd.kind === "restart"
+        ? [`/api/chaos/${cmd.kind}`, { nodeId: cmd.nodeId }]
+        : ["/api/fault", cmd];
+    const resp = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = (await resp.json()) as {
+      active?: string;
+      error?: { code: string; message: string };
+    };
+    if (!resp.ok || json.error) {
+      throw new Error(json.error?.message ?? `chaos ${cmd.kind} failed (${resp.status})`);
+    }
+    return json;
   }
 }

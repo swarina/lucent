@@ -3,9 +3,10 @@
 // events emitted while a shard builds its HNSW — so you literally watch memory
 // and edge counts climb as the index builds.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useLucent, NodeLive } from "../state/store";
+import { presetsFor, runChaos } from "./chaos";
 
 const SHARD_COLORS = [
   "var(--s0)", "var(--s1)", "var(--s2)", "var(--s3)",
@@ -168,10 +169,57 @@ function LoadGenControl() {
   );
 }
 
+// Chaos block (frontend.md §5.3): node picker + the six commands. Same actions
+// as right-clicking a stage node — both build from CHAOS_PRESETS. Faults only
+// show for shard nodes; kill/restart apply to any supervised process.
+function ChaosControl({ nodeIds }: { nodeIds: string[] }) {
+  const source = useLucent((s) => s.source);
+  const setToast = useLucent((s) => s.setChaosToast);
+  const [node, setNode] = useState<string>("");
+
+  // Default the picker to the first shard once the node list is known.
+  const options = useMemo(() => nodeIds, [nodeIds]);
+  useEffect(() => {
+    if (!node && options.length) setNode(options.find((n) => /^shard-/.test(n)) ?? options[0]!);
+  }, [options, node]);
+
+  const fire = async (label: string, cmd: ReturnType<typeof presetsFor>[number]["cmd"]) => {
+    if (!source || !node) return;
+    try {
+      setToast({ text: await runChaos(source, cmd(node)), error: false });
+    } catch (err) {
+      setToast({ text: `${node}: ${label} failed — ${(err as Error).message}`, error: true });
+    }
+  };
+
+  return (
+    <div className="chaos-block">
+      <span className="chaos-label mono">chaos</span>
+      <select className="mono" value={node} onChange={(e) => setNode(e.target.value)}>
+        {options.length === 0 && <option value="">no nodes</option>}
+        {options.map((id) => <option key={id} value={id}>{id}</option>)}
+      </select>
+      <div className="chaos-buttons">
+        {presetsFor(node || "shard-0a").map((p) => (
+          <button
+            key={p.label}
+            className={`chaos-btn ${p.danger ? "danger" : ""}`}
+            disabled={!node}
+            onClick={() => void fire(p.label, p.cmd)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ClusterPanel() {
   const open = useLucent((s) => s.clusterOpen);
   const close = useLucent((s) => s.setClusterOpen);
   const nodes = useLucent((s) => s.nodes);
+  const cluster = useLucent((s) => s.cluster);
 
   if (!open) return null;
 
@@ -180,6 +228,17 @@ export function ClusterPanel() {
     const m = /^shard-(\d+)/.exec(id);
     return m ? Number(m[1]) : -1;
   };
+
+  // Chaos picker options: every process we can address — the coordinator and
+  // embed plus each shard's primary AND backup from the live map (backups may
+  // not emit stats yet, so union the map in, not just `nodes`).
+  const chaosNodes = new Set<string>(["coord-0", "embed-0"]);
+  for (const id of nodes.keys()) chaosNodes.add(id);
+  for (const s of cluster?.shardMap?.shards ?? []) {
+    if (s.primaryNode) chaosNodes.add(s.primaryNode);
+    if (s.backupNode) chaosNodes.add(s.backupNode);
+  }
+  const chaosNodeIds = [...chaosNodes].sort((a, b) => a.localeCompare(b));
   const totalRss = entries.reduce((t, [, l]) => t + Number(l.stats?.rssBytes ?? 0), 0);
   const totalEdges = entries.reduce((t, [, l]) => t + Number(l.stats?.edgeCount ?? 0), 0);
   const totalDocs = entries.reduce((t, [, l]) => t + Number(l.stats?.docCount ?? 0), 0);
@@ -196,6 +255,7 @@ export function ClusterPanel() {
         <button className="close" onClick={() => close(false)}>✕</button>
       </div>
       <LoadGenControl />
+      <ChaosControl nodeIds={chaosNodeIds} />
       <div className="cluster-grid">
         {entries.length === 0 && (
           <div className="cluster-empty">waiting for node stats…</div>

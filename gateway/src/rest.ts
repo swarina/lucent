@@ -19,7 +19,12 @@ import {
 } from "./gen/lucent/v1/coordinator.js";
 import { TraceLevel } from "./gen/lucent/v1/common.js";
 import { Event, TraceBlob } from "./gen/lucent/v1/events.js";
-import { ShardServiceClient, TraceBlobRequest } from "./gen/lucent/v1/shard.js";
+import {
+  FaultRequest,
+  FaultResponse,
+  ShardServiceClient,
+  TraceBlobRequest,
+} from "./gen/lucent/v1/shard.js";
 
 interface QueryBody {
   text?: string;
@@ -231,12 +236,80 @@ export function registerRoutes(
   );
   app.get("/api/loadgen", (_req, reply) => void reply.send(loadgen.status()));
 
-  // Chaos/fault proxy the supervisor + shards (M3-T4).
-  for (const p of ["/api/chaos/kill", "/api/chaos/restart", "/api/chaos/spawn", "/api/fault"]) {
-    app.post(p, (_req, reply) => {
-      void reply.code(501).send({
-        error: { code: "NOT_IMPLEMENTED", message: `${p} lands with M3-T4` },
+  // Chaos surface (M3-T4). Two backends: process-level chaos (kill/restart) is
+  // the supervisor's control API; in-process faults (pause/slow/drop) are the
+  // shard's InjectFault RPC. Both are honest — a "kill" is a real SIGKILL.
+  const supervisor = `http://127.0.0.1:${config.ports.supervisorCtl}`;
+  const proxySupervisor = async (path: string, nodeId: string, reply: import("fastify").FastifyReply) => {
+    if (!nodeId) {
+      return reply.code(400).send({
+        error: { code: "BAD_NODE", message: "nodeId is required" },
       });
-    });
+    }
+    try {
+      const r = await fetch(`${supervisor}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nodeId }),
+      });
+      const json = (await r.json()) as { error?: string };
+      // The supervisor answers 200 with {error} for an unknown node; surface
+      // that as a 404 rather than a misleading success.
+      return reply.code(json.error ? 404 : 200).send(json);
+    } catch {
+      return reply.code(503).send({
+        error: { code: "SUPERVISOR_DOWN", message: `no supervisor at ${supervisor}` },
+      });
+    }
+  };
+
+  app.post<{ Body: { nodeId?: string } }>("/api/chaos/kill", (req, reply) =>
+    proxySupervisor("/kill", req.body?.nodeId ?? "", reply));
+  app.post<{ Body: { nodeId?: string } }>("/api/chaos/restart", (req, reply) =>
+    proxySupervisor("/restart", req.body?.nodeId ?? "", reply));
+  // Node spawn (grow the cluster) lands with M3-T5's node add/remove workflow.
+  app.post("/api/chaos/spawn", (_req, reply) =>
+    void reply.code(501).send({
+      error: { code: "NOT_IMPLEMENTED", message: "/api/chaos/spawn lands with M3-T5" },
+    }));
+
+  // In-process fault injection on a single shard (internals.md §4).
+  interface FaultBody {
+    nodeId?: string;
+    kind?: "pause" | "slow" | "drop" | "clear";
+    ms?: number;
+    p?: number;
   }
+  app.post<{ Body: FaultBody }>("/api/fault", (req, reply) => {
+    const b = req.body ?? {};
+    const client = shardClient(b.nodeId ?? "");
+    if (!client) {
+      void reply.code(400).send({
+        error: { code: "BAD_NODE", message: `not a shard node: ${b.nodeId ?? ""}` },
+      });
+      return;
+    }
+    let freq: FaultRequest;
+    switch (b.kind) {
+      case "pause": freq = FaultRequest.fromPartial({ pauseMs: Math.max(0, b.ms ?? 0) }); break;
+      case "slow": freq = FaultRequest.fromPartial({ slowMs: Math.max(0, b.ms ?? 0) }); break;
+      case "drop": freq = FaultRequest.fromPartial({ dropP: Math.min(1, Math.max(0, b.p ?? 0)) }); break;
+      case "clear": freq = FaultRequest.fromPartial({ clear: true }); break;
+      default:
+        void reply.code(400).send({
+          error: { code: "BAD_FAULT", message: `kind must be pause|slow|drop|clear, got ${b.kind}` },
+        });
+        return;
+    }
+    client.injectFault(freq, (err: grpc.ServiceError | null, resp?: FaultResponse) => {
+      if (err || !resp) {
+        const code = err?.code ?? grpc.status.UNKNOWN;
+        void reply.code(grpcToHttp(code)).send({
+          error: { code: grpc.status[code], message: err?.details ?? "unknown" },
+        });
+        return;
+      }
+      void reply.send({ nodeId: b.nodeId, active: resp.active });
+    });
+  });
 }

@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo } from "react";
 
+import { ChaosMenu } from "./components/ChaosMenu";
 import { ClusterPanel } from "./components/ClusterPanel";
 import { QueryBar } from "./components/QueryBar";
 import { ResultsPanel } from "./components/ResultsPanel";
@@ -17,6 +18,7 @@ export function App() {
   const source = useMemo(() => new LiveSource(), []);
 
   useEffect(() => {
+    useLucent.getState().setSource(source);
     source.onStatusChange = (c) => {
       useLucent.getState().setConnected(c);
       if (c) {
@@ -40,6 +42,7 @@ export function App() {
       <Waterfall />
       <ClusterPanel />
       <InspectorOverlay />
+      <ChaosMenu />
     </div>
   );
 }

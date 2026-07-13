@@ -4,6 +4,7 @@
 
 import { create } from "zustand";
 
+import type { LiveSource } from "../sources/live";
 import {
   ClusterStateJson,
   EventJson,
@@ -12,6 +13,18 @@ import {
   QueryResponseJson,
   SpanJson,
 } from "../types";
+
+/** Right-click chaos menu anchored at a viewport point over a stage node. */
+export interface ChaosMenuState {
+  nodeId: string;
+  x: number;
+  y: number;
+}
+/** Transient feedback line after a chaos action fires. */
+export interface ChaosToast {
+  text: string;
+  error: boolean;
+}
 
 export interface NodeLive {
   stats: NodeStatsJson | null;
@@ -54,6 +67,16 @@ interface LucentState {
   /** trace id the 3D inspector is open on, or null (frontend.md §5.2) */
   inspectorTrace: string | null;
 
+  /** the live source (held here so any component can drive chaos/queries) */
+  source: LiveSource | null;
+  /** open right-click chaos menu, or null */
+  chaosMenu: ChaosMenuState | null;
+  /** last chaos action result, shown briefly then cleared */
+  chaosToast: ChaosToast | null;
+
+  setSource(s: LiveSource): void;
+  setChaosMenu(m: ChaosMenuState | null): void;
+  setChaosToast(t: ChaosToast | null): void;
   setConnected(c: boolean): void;
   openInspector(traceId: string): void;
   closeInspector(): void;
@@ -82,7 +105,13 @@ export const useLucent = create<LucentState>((set) => ({
   nodes: new Map(),
   clusterOpen: false,
   inspectorTrace: null,
+  source: null,
+  chaosMenu: null,
+  chaosToast: null,
 
+  setSource: (source) => set({ source }),
+  setChaosMenu: (chaosMenu) => set({ chaosMenu }),
+  setChaosToast: (chaosToast) => set({ chaosToast }),
   setConnected: (connected) => set({ connected }),
   openInspector: (inspectorTrace) => set({ inspectorTrace }),
   closeInspector: () => set({ inspectorTrace: null }),

@@ -52,6 +52,13 @@ export function Stage() {
   const setHover = useLucent((s) => s.setHover);
   const lastResponse = useLucent((s) => s.lastResponse);
   const activeTrace = useLucent((s) => s.activeTrace);
+  const setChaosMenu = useLucent((s) => s.setChaosMenu);
+
+  // Right-click any node → chaos menu at the cursor (frontend.md §5.3).
+  const onNodeContext = (nodeId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    setChaosMenu({ nodeId, x: e.clientX, y: e.clientY });
+  };
 
   const [, tick] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
@@ -75,7 +82,7 @@ export function Stage() {
       <StageNode
         id="embed-0" x={cx - 210} y={cy} r={16} color="var(--text-dim)"
         glow={glowFor(lastActivity.get("embed-0"), now)} label="embed"
-        hovered={hover?.ref === "embed-0"} onHover={setHover}
+        hovered={hover?.ref === "embed-0"} onHover={setHover} onContext={onNodeContext}
       />
       <line className="wire" x1={cx - 194} y1={cy} x2={cx - 26} y2={cy} />
       {/* embed pulse: fires just before the fan-out (query -> embed) */}
@@ -132,7 +139,7 @@ export function Stage() {
               id={nodeId} x={x} y={y} r={18} color={color}
               glow={glowFor(lastActivity.get(nodeId), now)} label={`s${shardId}`}
               dead={isMissing} dim={isUnprobed} hovered={isHover} shardId={shardId}
-              onHover={setHover}
+              onHover={setHover} onContext={onNodeContext}
             />
           </g>
         );
@@ -141,7 +148,7 @@ export function Stage() {
       <StageNode
         id="coord-0" x={cx} y={cy} r={22} color="var(--text)"
         glow={glowFor(lastActivity.get("coord-0"), now)} label="coord"
-        hovered={hover?.ref === "coord-0"} onHover={setHover}
+        hovered={hover?.ref === "coord-0"} onHover={setHover} onContext={onNodeContext}
       />
     </svg>
   );
@@ -160,13 +167,15 @@ function StageNode(props: {
   hovered?: boolean;
   shardId?: number;
   onHover: (h: { kind: "stageNode"; ref: string; shardId?: number } | null) => void;
+  onContext?: (id: string, e: React.MouseEvent) => void;
 }) {
-  const { id, x, y, r, color, glow, label, dead, dim, hovered, shardId, onHover } = props;
+  const { id, x, y, r, color, glow, label, dead, dim, hovered, shardId, onHover, onContext } = props;
   return (
     <g
       className={`stagenode ${dead ? "dead" : ""} ${dim ? "dim" : ""}`}
       onMouseEnter={() => onHover({ kind: "stageNode", ref: id, shardId })}
       onMouseLeave={() => onHover(null)}
+      onContextMenu={onContext ? (e) => onContext(id, e) : undefined}
     >
       {glow > 0.02 && (
         <circle cx={x} cy={y} r={r + 6 + glow * 8} fill={color} opacity={glow * 0.25} />
