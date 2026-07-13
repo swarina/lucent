@@ -1,6 +1,8 @@
-// The cluster stage (2D SVG, frontend.md §5.1 minimal slice): embed — coord —
-// shards radially, nodes glow on recent event activity, linked highlighting
-// with the waterfall via the shared hover state.
+// The cluster stage (2D SVG, frontend.md §5.1): embed — coord — shards
+// radially. Nodes glow on recent event activity; on each query a fan-out beam
+// sweeps coord→shard and the answer returns coord←shard, so you watch
+// scatter-gather happen. Dead shards get a red outbound pulse that fizzles;
+// unprobed shards stay dim. Linked highlighting via the shared hover state.
 
 import { useEffect, useReducer } from "react";
 
@@ -18,17 +20,42 @@ function glowFor(last: number | undefined, now: number): number {
   return Math.pow(0.5, (now - last) / GLOW_HALF_LIFE_MS);
 }
 
+// One fan-out beam: coord→shard (query) then shard→coord (result), animated by
+// a CSS keyframe (mount-relative, so remounting via the parent <g> key replays
+// it each query — no React re-renders, unlike rAF; no document-timeline gotcha,
+// unlike SMIL). --dx/--dy carry the coord→shard delta into the keyframe.
+// Missing shards: an outbound-only red pulse that fades (request left, nothing
+// returned).
+function Beam({ sx, sy, ex, ey, color, missing }: {
+  sx: number; sy: number; ex: number; ey: number; color: string; missing: boolean;
+}) {
+  const style = {
+    "--dx": `${ex - sx}`,
+    "--dy": `${ey - sy}`,
+  } as React.CSSProperties;
+  return (
+    <circle
+      className={missing ? "beam beam-miss" : "beam beam-fanout"}
+      r={4}
+      cx={sx}
+      cy={sy}
+      fill={missing ? "var(--down)" : color}
+      style={style}
+    />
+  );
+}
+
 export function Stage() {
   const cluster = useLucent((s) => s.cluster);
   const lastActivity = useLucent((s) => s.lastActivity);
   const hover = useLucent((s) => s.hover);
   const setHover = useLucent((s) => s.setHover);
   const lastResponse = useLucent((s) => s.lastResponse);
+  const activeTrace = useLucent((s) => s.activeTrace);
 
-  // Re-render for glow decay while anything is lit.
   const [, tick] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
-    const id = setInterval(tick, 120);
+    const id = setInterval(tick, 120); // glow decay
     return () => clearInterval(id);
   }, []);
 
@@ -45,21 +72,43 @@ export function Stage() {
 
   return (
     <svg className="stage" viewBox={`0 0 ${W} ${H}`}>
-      {/* embed node, left of coordinator */}
       <StageNode
-        id="embed-0"
-        x={cx - 210}
-        y={cy}
-        r={16}
-        color="var(--text-dim)"
-        glow={glowFor(lastActivity.get("embed-0"), now)}
-        label="embed"
-        hovered={hover?.ref === "embed-0"}
-        onHover={setHover}
+        id="embed-0" x={cx - 210} y={cy} r={16} color="var(--text-dim)"
+        glow={glowFor(lastActivity.get("embed-0"), now)} label="embed"
+        hovered={hover?.ref === "embed-0"} onHover={setHover}
       />
       <line className="wire" x1={cx - 194} y1={cy} x2={cx - 26} y2={cy} />
+      {/* embed pulse: fires just before the fan-out (query -> embed) */}
+      {activeTrace && (
+        <circle
+          key={`embed-${activeTrace}`}
+          className="beam beam-embed"
+          r={4}
+          cx={cx - 26}
+          cy={cy}
+          fill="var(--trace-a)"
+          style={{ "--dx": `${-168}`, "--dy": "0" } as React.CSSProperties}
+        />
+      )}
 
-      {/* shards, radial */}
+      {/* fan-out beams, keyed by trace so each query replays them */}
+      <g key={activeTrace ?? "none"}>
+        {activeTrace && shards.map((s, i) => {
+          const angle = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(1, shards.length);
+          const shardId = s.shardId ?? i;
+          if (unprobed.has(shardId)) return null;
+          const sx = cx + 24 * Math.cos(angle);
+          const sy = cy + 24 * Math.sin(angle);
+          const ex = cx + (R - 22) * Math.cos(angle);
+          const ey = cy + (R - 22) * Math.sin(angle);
+          return (
+            <Beam key={shardId} sx={sx} sy={sy} ex={ex} ey={ey}
+              color={SHARD_COLORS[shardId % SHARD_COLORS.length]!}
+              missing={missing.has(shardId)} />
+          );
+        })}
+      </g>
+
       {shards.map((s, i) => {
         const angle = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(1, shards.length);
         const x = cx + R * Math.cos(angle);
@@ -67,43 +116,32 @@ export function Stage() {
         const shardId = s.shardId ?? i;
         const nodeId = s.primaryNode ?? `shard-${shardId}a`;
         const isHover = hover?.shardId === shardId || hover?.ref === nodeId;
+        const color = SHARD_COLORS[shardId % SHARD_COLORS.length]!;
+        const isMissing = missing.has(shardId);
+        const isUnprobed = unprobed.has(shardId);
+        const ex = cx + (R - 22) * Math.cos(angle);
+        const ey = cy + (R - 22) * Math.sin(angle);
+
         return (
           <g key={nodeId}>
             <line
-              className={`wire ${missing.has(shardId) ? "wire-dead" : ""} ${unprobed.has(shardId) ? "wire-dim" : ""}`}
-              x1={cx} y1={cy}
-              x2={cx + (R - 22) * Math.cos(angle)}
-              y2={cy + (R - 22) * Math.sin(angle)}
+              className={`wire ${isMissing ? "wire-dead" : ""} ${isUnprobed ? "wire-dim" : ""}`}
+              x1={cx} y1={cy} x2={ex} y2={ey}
             />
             <StageNode
-              id={nodeId}
-              x={x}
-              y={y}
-              r={18}
-              color={SHARD_COLORS[shardId % SHARD_COLORS.length]!}
-              glow={glowFor(lastActivity.get(nodeId), now)}
-              label={`s${shardId}`}
-              dead={missing.has(shardId)}
-              dim={unprobed.has(shardId)}
-              hovered={isHover}
-              shardId={shardId}
+              id={nodeId} x={x} y={y} r={18} color={color}
+              glow={glowFor(lastActivity.get(nodeId), now)} label={`s${shardId}`}
+              dead={isMissing} dim={isUnprobed} hovered={isHover} shardId={shardId}
               onHover={setHover}
             />
           </g>
         );
       })}
 
-      {/* coordinator, center — drawn last so it sits on top of wires */}
       <StageNode
-        id="coord-0"
-        x={cx}
-        y={cy}
-        r={22}
-        color="var(--text)"
-        glow={glowFor(lastActivity.get("coord-0"), now)}
-        label="coord"
-        hovered={hover?.ref === "coord-0"}
-        onHover={setHover}
+        id="coord-0" x={cx} y={cy} r={22} color="var(--text)"
+        glow={glowFor(lastActivity.get("coord-0"), now)} label="coord"
+        hovered={hover?.ref === "coord-0"} onHover={setHover}
       />
     </svg>
   );

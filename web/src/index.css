@@ -654,3 +654,41 @@ body {
   font-size: 0.78rem;
   opacity: 0.85;
 }
+
+/* fan-out beam pulses (CSS-animated, mount-relative so a remount replays) */
+.beam {
+  filter: drop-shadow(0 0 5px currentColor);
+  opacity: 0;
+}
+
+/* coord → shard (query) then shard → coord (result returning, turns white) */
+@keyframes fanout {
+  0% { transform: translate(0, 0); opacity: 0; }
+  6% { opacity: 1; }
+  50% { transform: translate(calc(var(--dx) * 1px), calc(var(--dy) * 1px)); opacity: 1; fill: #fff; }
+  94% { opacity: 1; }
+  100% { transform: translate(0, 0); opacity: 0; }
+}
+.beam-fanout {
+  animation: fanout 0.66s ease-in-out forwards;
+}
+
+/* dead shard: outbound red pulse that fizzles */
+@keyframes fanoutMiss {
+  0% { transform: translate(0, 0); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(calc(var(--dx) * 1px), calc(var(--dy) * 1px)); opacity: 0; }
+}
+.beam-miss {
+  animation: fanoutMiss 0.4s ease-out forwards;
+}
+
+/* query → embed pulse */
+@keyframes fanoutEmbed {
+  0% { transform: translate(0, 0); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translate(calc(var(--dx) * 1px), calc(var(--dy) * 1px)); opacity: 0; }
+}
+.beam-embed {
+  animation: fanoutEmbed 0.3s ease-out forwards;
+}
