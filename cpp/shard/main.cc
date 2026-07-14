@@ -88,7 +88,12 @@ int main(int argc, char** argv) {
       service.EmitStats();
       std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
-    server->Shutdown();
+    // Graceful, but bounded: a backup being *drained on its own* (node remove)
+    // still has an open Replicate stream from its primary, which keeps
+    // replicating to this address — an unbounded Shutdown() would block on that
+    // handler forever (full-cluster shutdown hides this because the primary
+    // stops too). Force-cancel stragglers after a short grace period.
+    server->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(2));
   });
 
   server->Wait();
