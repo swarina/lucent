@@ -235,6 +235,11 @@ QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
   std::sort(entries.begin(), entries.end(),
             [](const auto* a, const auto* b) { return a->shard_id() < b->shard_id(); });
 
+  // Advance the round-robin cursor once PER QUERY (not per shard): a per-shard
+  // increment would move by shard_count each query, preserving parity — so with
+  // 2 replicas every shard would keep picking the *same* replica forever. One
+  // per-query step + a per-shard offset makes each shard genuinely alternate.
+  const uint32_t base = rr_++;
   const size_t want = (probe == 0 || probe >= entries.size()) ? entries.size()
                                                               : probe;
   for (size_t i = 0; i < entries.size(); ++i) {
@@ -253,7 +258,7 @@ QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
       plan.uncovered.push_back(e->shard_id());
       continue;
     }
-    const auto& r = reps[(rr_++) % reps.size()];
+    const auto& r = reps[(base + e->shard_id()) % reps.size()];
     plan.probe.push_back(PlannedShard{e->shard_id(), r.first, r.second});
   }
   return plan;

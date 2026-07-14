@@ -585,6 +585,22 @@ TEST_F(CoordinatorFailoverTest, RemoveReplicaDrainsBackupButNotPrimary) {
   EXPECT_NE(RemoveReplica("shard-9z").error(), "");
 }
 
+TEST_F(CoordinatorFailoverTest, RoundRobinAlternatesReplicasPerShard) {
+  // Shard 0 has primary shard-0a (doc 1) and backup shard-0b (doc 5); exactly
+  // one replica serves shard 0 per query. Across queries the choice must
+  // alternate — a per-shard cursor step would fix the parity and stick to one.
+  std::set<std::string> shard0_servers;
+  for (int i = 0; i < 4; ++i) {
+    const auto resp = Query();  // bind: .hits() would dangle off a temporary
+    for (const auto& h : resp.hits()) {
+      if (h.shard_id() == 0) shard0_servers.insert(h.node_id());
+    }
+  }
+  EXPECT_TRUE(shard0_servers.count("shard-0a") != 0 &&
+              shard0_servers.count("shard-0b") != 0)
+      << "round-robin used only " << shard0_servers.size() << " replica(s)";
+}
+
 TEST_F(CoordinatorFailoverTest, AddedBackupIsRoutedToAndCountsAsCoverage) {
   // Point shard 1's new backup at shard 0's primary server (doc 1) purely so
   // there's a live gRPC endpoint to route to; we only assert coverage stays
