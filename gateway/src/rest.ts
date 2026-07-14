@@ -11,11 +11,15 @@ import type { EventStore } from "./collector.js";
 import type { GatewayConfig } from "./config.js";
 import { LoadGen } from "./loadgen.js";
 import {
+  AddReplicaRequest,
+  AddReplicaResponse,
   ClusterState,
   ClusterStateRequest,
   CoordinatorServiceClient,
   QueryRequest,
   QueryResponse,
+  RemoveReplicaRequest,
+  RemoveReplicaResponse,
 } from "./gen/lucent/v1/coordinator.js";
 import { TraceLevel } from "./gen/lucent/v1/common.js";
 import { Event, TraceBlob } from "./gen/lucent/v1/events.js";
@@ -267,11 +271,96 @@ export function registerRoutes(
     proxySupervisor("/kill", req.body?.nodeId ?? "", reply));
   app.post<{ Body: { nodeId?: string } }>("/api/chaos/restart", (req, reply) =>
     proxySupervisor("/restart", req.body?.nodeId ?? "", reply));
-  // Node spawn (grow the cluster) lands with M3-T5's node add/remove workflow.
-  app.post("/api/chaos/spawn", (_req, reply) =>
-    void reply.code(501).send({
-      error: { code: "NOT_IMPLEMENTED", message: "/api/chaos/spawn lands with M3-T5" },
-    }));
+  // Node add (M3-T5): spawn a replacement backup, then register it with the
+  // coordinator. Order matters — the process must be SERVING (it loads the
+  // primary's sealed index) before the coordinator starts routing to it.
+  const addReplica = (shardId: number, nodeId: string, addr: string) =>
+    new Promise<AddReplicaResponse>((resolve, reject) => {
+      coord.addReplica(
+        AddReplicaRequest.fromPartial({ shardId, nodeId, addr }),
+        (err: grpc.ServiceError | null, r?: AddReplicaResponse) =>
+          err || !r ? reject(err ?? new Error("no response")) : resolve(r));
+    });
+
+  app.post<{ Body: { shardId?: number; replica?: string } }>(
+    "/api/chaos/spawn",
+    async (req, reply) => {
+      const shardId = req.body?.shardId ?? -1;
+      const replica = req.body?.replica ?? "b";
+      let spawn: { nodeId?: string; addr?: string; error?: string };
+      try {
+        const r = await fetch(`${supervisor}/spawn`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ shardId, replica }),
+        });
+        spawn = (await r.json()) as typeof spawn;
+      } catch {
+        return reply.code(503).send({
+          error: { code: "SUPERVISOR_DOWN", message: `no supervisor at ${supervisor}` },
+        });
+      }
+      if (spawn.error || !spawn.nodeId || !spawn.addr) {
+        return reply.code(400).send({
+          error: { code: "SPAWN_FAILED", message: spawn.error ?? "supervisor returned no node" },
+        });
+      }
+      // Process is up and serving from the sealed copy; register it.
+      try {
+        const reg = await addReplica(shardId, spawn.nodeId, spawn.addr);
+        if (reg.error) {
+          return reply.code(409).send({
+            error: { code: "REGISTER_FAILED", message: reg.error },
+            nodeId: spawn.nodeId,
+          });
+        }
+        return reply.send({ nodeId: spawn.nodeId, addr: spawn.addr, epoch: Number(reg.epoch) });
+      } catch (err) {
+        return reply.code(503).send({
+          error: { code: "COORD_UNAVAILABLE", message: (err as Error).message },
+          nodeId: spawn.nodeId,
+        });
+      }
+    });
+
+  // Node remove (M3-T5): drain from the map first (coordinator stops routing),
+  // then stop the process with a graceful SIGTERM.
+  app.post<{ Body: { nodeId?: string } }>("/api/chaos/drain", async (req, reply) => {
+    const nodeId = req.body?.nodeId ?? "";
+    if (!nodeId) {
+      return reply.code(400).send({ error: { code: "BAD_NODE", message: "nodeId is required" } });
+    }
+    let epoch: number;
+    try {
+      const rem = await new Promise<RemoveReplicaResponse>((resolve, reject) => {
+        coord.removeReplica(
+          RemoveReplicaRequest.fromPartial({ nodeId }),
+          (err: grpc.ServiceError | null, r?: RemoveReplicaResponse) =>
+            err || !r ? reject(err ?? new Error("no response")) : resolve(r));
+      });
+      if (rem.error) {
+        return reply.code(400).send({ error: { code: "DRAIN_REFUSED", message: rem.error } });
+      }
+      epoch = Number(rem.epoch);
+    } catch (err) {
+      return reply.code(503).send({
+        error: { code: "COORD_UNAVAILABLE", message: (err as Error).message },
+      });
+    }
+    // Drained from routing; now a graceful stop (SIGTERM). A missing process is
+    // fine — the point was to remove it from the cluster.
+    try {
+      await fetch(`${supervisor}/kill`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nodeId, signal: "SIGTERM" }),
+      });
+    } catch {
+      // report success of the drain even if the stop couldn't be delivered
+      return reply.send({ nodeId, epoch, stopped: false });
+    }
+    return reply.send({ nodeId, epoch, stopped: true });
+  });
 
   // In-process fault injection on a single shard (internals.md §4).
   interface FaultBody {

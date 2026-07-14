@@ -117,13 +117,21 @@ def port_open(port: int, timeout: float = 0.25) -> bool:
 
 
 class Supervisor:
-    def __init__(self, specs: list[ProcSpec]):
+    def __init__(self, specs: list[ProcSpec], *, config_path: str | None = None,
+                 cfg=None, shard_bin: str | None = None,
+                 data_root: pathlib.Path | None = None):
         self.procs: dict[str, Proc] = {
             s.node_id: Proc(s, color=COLORS[i % len(COLORS)])
             for i, s in enumerate(specs)
         }
         self._lock = threading.Lock()
         self._stopping = False
+        # Context for dynamic node spawn (M3-T5); absent when a test builds a
+        # Supervisor directly from specs — spawn() then reports it's unconfigured.
+        self._config_path = config_path
+        self._cfg = cfg
+        self._shard_bin = shard_bin
+        self._data_root = data_root
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -217,6 +225,43 @@ class Supervisor:
             return {"nodeId": node_id, "pid": proc.popen.pid,  # type: ignore[union-attr]
                     "restarts": proc.restarts}
 
+    def spawn(self, shard_id: int, replica: str = "b") -> dict:
+        """Spawn a replacement backup for a shard (M3-T5, node add). The new
+        node loads the primary's *sealed* index straight from disk — on one box
+        we copy the (immutable) sealed dir rather than re-replicating live. The
+        caller registers it with the coordinator (AddReplica) after this returns.
+        """
+        if self._cfg is None or self._shard_bin is None or self._data_root is None:
+            return {"error": "dynamic spawn is not configured on this supervisor"}
+        if replica not in ("a", "b"):
+            return {"error": f"replica must be 'a' or 'b', got '{replica}'"}
+        node_id = f"shard-{shard_id}{replica}"
+        with self._lock:
+            if not (0 <= shard_id < self._cfg.cluster.shards):
+                return {"error": f"no such shard {shard_id}"}
+            existing = self.procs.get(node_id)
+            if existing and existing.popen and existing.popen.poll() is None:
+                return {"error": f"{node_id} is already running"}
+            src = (self._data_root / f"shard-{shard_id}a").resolve()
+            if not (src / "manifest.json").exists():
+                return {"error": f"primary shard-{shard_id}a has no sealed index "
+                                 f"at {src} — seal it before adding a backup"}
+            dst = (self._data_root / node_id).resolve()
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)  # sealed == immutable, so a copy is safe
+            port = self._cfg.shard_port(shard_id, replica)
+            spec = ProcSpec(node_id, "shard",
+                            [self._shard_bin, "--node-id", node_id,
+                             "--config", str(self._config_path),
+                             "--data-dir", str(dst)],
+                            port)
+            proc = Proc(spec, color=COLORS[len(self.procs) % len(COLORS)])
+            self.procs[node_id] = proc
+            self._spawn(proc)
+            return {"nodeId": node_id, "pid": proc.popen.pid,  # type: ignore[union-attr]
+                    "port": port, "addr": f"127.0.0.1:{port}"}
+
 
 def make_control_handler(sup: Supervisor):
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -251,6 +296,9 @@ def make_control_handler(sup: Supervisor):
                                          body.get("signal", "SIGKILL")))
             elif self.path == "/restart":
                 self._json(200, sup.restart(body.get("nodeId", "")))
+            elif self.path == "/spawn":
+                self._json(200, sup.spawn(int(body.get("shardId", -1)),
+                                          body.get("replica", "b")))
             else:
                 self._json(404, {"error": "not found"})
 
@@ -279,7 +327,12 @@ def run_dev(config_path: str, shards: int, replicas: int, partitioning: str,
 
     cfg = config_mod.load(derived)
     specs = build_specs(repo_root, derived, cfg, replicas, fake_embed=fake_embed)
-    sup = Supervisor(specs)
+    # Resolve the data root the same way the shards do (paths.data vs the shared
+    # cwd) so a spawned backup can copy the primary's sealed dir.
+    shard_bin = find_binary(repo_root, "lucent-shard", "shard")
+    data_root = (pathlib.Path.cwd() / cfg.paths.data)
+    sup = Supervisor(specs, config_path=str(derived), cfg=cfg,
+                     shard_bin=shard_bin, data_root=data_root)
 
     ctl = http.server.ThreadingHTTPServer(
         ("127.0.0.1", cfg.ports.supervisor_ctl), make_control_handler(sup))

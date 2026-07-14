@@ -120,6 +120,7 @@ void CoordinatorServer::RecordHealth(const std::string& node_id, bool alive) {
   if (alive) {
     h.misses = 0;
     h.state = lucent::v1::HEALTH_HEALTHY;
+    h.ever_healthy = true;
   } else {
     ++h.misses;
     if (h.misses >= config_.health.down_after_misses) {
@@ -131,7 +132,9 @@ void CoordinatorServer::RecordHealth(const std::string& node_id, bool alive) {
   if (h.state == prev) return;
   spdlog::info("health: {} {} (misses {})", node_id,
                lucent::v1::HealthState_Name(h.state), h.misses);
-  if (h.state == lucent::v1::HEALTH_DOWN) MaybeFailover(node_id);
+  // Only a node we've actually seen serving can "fail" over; one that never
+  // came up (boot/loading) just stays DOWN in the map until it answers.
+  if (h.state == lucent::v1::HEALTH_DOWN && h.ever_healthy) MaybeFailover(node_id);
 }
 
 // A primary going DOWN with a healthy backup hands the shard over: swap roles,
@@ -170,6 +173,9 @@ void CoordinatorServer::SetHealthForTest(const std::string& node_id,
   h.misses = state == lucent::v1::HEALTH_DOWN      ? config_.health.down_after_misses
              : state == lucent::v1::HEALTH_SUSPECT ? config_.health.suspect_after_misses
                                                    : 0;
+  // The seam models a node that has been in service; forcing it DOWN therefore
+  // represents a real failure (which may promote a backup), not a boot no-show.
+  h.ever_healthy = true;
   if (state == lucent::v1::HEALTH_DOWN) MaybeFailover(node_id);
 }
 
@@ -439,6 +445,76 @@ grpc::Status CoordinatorServer::GetClusterState(
     add(e.primary_node());
     add(e.backup_node());
   }
+  return grpc::Status::OK;
+}
+
+grpc::Status CoordinatorServer::AddReplica(
+    grpc::ServerContext* /*ctx*/, const lucent::v1::AddReplicaRequest* req,
+    lucent::v1::AddReplicaResponse* resp) {
+  if (req->node_id().empty() || req->addr().empty()) {
+    resp->set_error("node_id and addr are required");
+    return grpc::Status::OK;
+  }
+  std::lock_guard<std::mutex> lock(map_mu_);
+  lucent::v1::ShardMapEntry* target = nullptr;
+  for (auto& e : *shard_map_.mutable_shards()) {
+    if (e.shard_id() == req->shard_id()) target = &e;
+    // Guard against a node_id already live anywhere in the map.
+    if (e.primary_node() == req->node_id() || e.backup_node() == req->node_id()) {
+      resp->set_error("node " + req->node_id() + " is already in the map");
+      return grpc::Status::OK;
+    }
+  }
+  if (target == nullptr) {
+    resp->set_error("no such shard " + std::to_string(req->shard_id()));
+    return grpc::Status::OK;
+  }
+  if (!target->backup_node().empty() && IsHealthy(target->backup_node())) {
+    resp->set_error("shard " + std::to_string(req->shard_id()) +
+                    " already has a healthy backup");
+    return grpc::Status::OK;
+  }
+  target->set_backup_node(req->node_id());
+  target->set_backup_addr(req->addr());
+  target->set_backup_state(lucent::v1::NODE_STATE_SERVING);
+  // Seed optimistic health; the HealthWatcher's next ping confirms/demotes.
+  health_[req->node_id()] = NodeHealth{lucent::v1::HEALTH_HEALTHY, 0};
+  shard_map_.set_epoch(shard_map_.epoch() + 1);
+  resp->set_epoch(shard_map_.epoch());
+  spdlog::info("ADD REPLICA shard {}: backup <- {} ({}) (epoch {})",
+               req->shard_id(), req->node_id(), req->addr(), shard_map_.epoch());
+  return grpc::Status::OK;
+}
+
+grpc::Status CoordinatorServer::RemoveReplica(
+    grpc::ServerContext* /*ctx*/, const lucent::v1::RemoveReplicaRequest* req,
+    lucent::v1::RemoveReplicaResponse* resp) {
+  if (req->node_id().empty()) {
+    resp->set_error("node_id is required");
+    return grpc::Status::OK;
+  }
+  std::lock_guard<std::mutex> lock(map_mu_);
+  for (auto& e : *shard_map_.mutable_shards()) {
+    if (e.backup_node() == req->node_id()) {
+      e.clear_backup_node();
+      e.clear_backup_addr();
+      e.set_backup_state(lucent::v1::NODE_STATE_UNSPECIFIED);
+      health_.erase(req->node_id());
+      shard_map_.set_epoch(shard_map_.epoch() + 1);
+      resp->set_epoch(shard_map_.epoch());
+      spdlog::info("REMOVE REPLICA shard {}: backup {} drained (epoch {})",
+                   e.shard_id(), req->node_id(), shard_map_.epoch());
+      return grpc::Status::OK;
+    }
+    if (e.primary_node() == req->node_id()) {
+      // Removing a primary would strand the shard unless a healthy backup can
+      // take over first — refuse and let the operator fail over.
+      resp->set_error("node " + req->node_id() + " is the primary of shard " +
+                      std::to_string(e.shard_id()) + "; fail over before removing");
+      return grpc::Status::OK;
+    }
+  }
+  resp->set_error("node " + req->node_id() + " is not in the map");
   return grpc::Status::OK;
 }
 

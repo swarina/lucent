@@ -40,6 +40,15 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
                                const lucent::v1::ClusterStateRequest* req,
                                lucent::v1::ClusterState* resp) override;
 
+  // Membership admin (M3-T5). Mutate the live shard map under map_mu_, bump the
+  // epoch, and (Add) seed the new node's health as HEALTHY pending confirmation.
+  grpc::Status AddReplica(grpc::ServerContext* ctx,
+                          const lucent::v1::AddReplicaRequest* req,
+                          lucent::v1::AddReplicaResponse* resp) override;
+  grpc::Status RemoveReplica(grpc::ServerContext* ctx,
+                             const lucent::v1::RemoveReplicaRequest* req,
+                             lucent::v1::RemoveReplicaResponse* resp) override;
+
   // HealthWatcher: one pass over all nodes (own thread in prod; callable
   // directly from tests for determinism). Returns after updating health +
   // performing any failover.
@@ -51,6 +60,11 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
   struct NodeHealth {
     lucent::v1::HealthState state = lucent::v1::HEALTH_HEALTHY;
     int misses = 0;
+    // Set on the first successful ping. Failover only promotes away from a node
+    // that was *observed healthy* and then died — a node that has never come up
+    // (still loading its sealed index at boot) must not trigger a spurious
+    // promotion just because the coordinator can't reach it yet.
+    bool ever_healthy = false;
   };
 
   lucent::v1::ShardService::Stub* ShardStub(const std::string& addr);

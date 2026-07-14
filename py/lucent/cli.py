@@ -165,12 +165,64 @@ def node() -> None:
     """Cluster node operations."""
 
 
+def _gateway_post(config: str, path: str, payload: dict) -> dict:
+    """POST JSON to the running gateway (which orchestrates supervisor +
+    coordinator). Returns the parsed reply; exits non-zero on transport error."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    from lucent import config as config_mod
+
+    cfg = config_mod.load(config)
+    url = f"http://127.0.0.1:{cfg.ports.gateway_http}{path}"
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read() or b"{}")
+        except json.JSONDecodeError:
+            return {"error": {"code": str(e.code), "message": e.reason}}
+    except OSError as e:
+        click.secho(f"cannot reach gateway at {url}: {e}", fg="red", err=True)
+        click.echo("is the cluster running? (lucent dev …)", err=True)
+        sys.exit(1)
+
+
 @node.command("add")
 @click.option("--shard", required=True, type=int)
 @click.option("--replica", type=click.Choice(["a", "b"]), default="b")
-def node_add(shard: int, replica: str) -> None:
-    """Add a shard node to a running cluster."""
-    _todo("M3-T5")
+@click.option("--config", default="cluster.yaml", show_default=True)
+def node_add(shard: int, replica: str, config: str) -> None:
+    """Add a replacement backup to a shard: spawn the process (it loads the
+    primary's sealed index) and register it with the coordinator."""
+    res = _gateway_post(config, "/api/chaos/spawn",
+                        {"shardId": shard, "replica": replica})
+    if res.get("error"):
+        err = res["error"]
+        click.secho(f"add failed: {err.get('message', err) if isinstance(err, dict) else err}",
+                    fg="red", err=True)
+        sys.exit(1)
+    click.secho(f"added {res.get('nodeId')} as backup of shard {shard} "
+                f"(epoch {res.get('epoch')})", fg="green")
+
+
+@node.command("remove")
+@click.option("--node", "node_id", required=True, help="e.g. shard-1b (a backup).")
+@click.option("--config", default="cluster.yaml", show_default=True)
+def node_remove(node_id: str, config: str) -> None:
+    """Drain a backup from the map, then stop its process (graceful SIGTERM)."""
+    res = _gateway_post(config, "/api/chaos/drain", {"nodeId": node_id})
+    if res.get("error"):
+        err = res["error"]
+        click.secho(f"remove failed: {err.get('message', err) if isinstance(err, dict) else err}",
+                    fg="red", err=True)
+        sys.exit(1)
+    click.secho(f"drained {node_id} (epoch {res.get('epoch')}) and stopped it", fg="green")
 
 
 if __name__ == "__main__":

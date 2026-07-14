@@ -7,6 +7,14 @@ import "lucent/v1/common.proto";
 service CoordinatorService {
   rpc Query(QueryRequest) returns (QueryResponse);
   rpc GetClusterState(ClusterStateRequest) returns (ClusterState);
+
+  // Membership admin (M3-T5, node add/remove). These mutate the live shard map
+  // under the same lock the HealthWatcher/router use, bumping the epoch. NOT
+  // consensus-backed — a single-coordinator convenience until M5's RaftStore
+  // owns the map. The caller (supervisor/CLI, via the gateway) is responsible
+  // for having actually spawned/drained the process before/after the call.
+  rpc AddReplica(AddReplicaRequest) returns (AddReplicaResponse);
+  rpc RemoveReplica(RemoveReplicaRequest) returns (RemoveReplicaResponse);
 }
 
 message QueryRequest {
@@ -33,4 +41,28 @@ message NodeHealth {
   string node_id = 1;
   HealthState health = 2;
   uint32 misses = 3;
+}
+
+// Register a freshly-spawned replica as a shard's backup. On one machine the
+// new node has already loaded the primary's sealed index from disk, so it is
+// query-eligible immediately; the HealthWatcher then confirms it.
+message AddReplicaRequest {
+  uint32 shard_id = 1;
+  string node_id = 2;  // e.g. "shard-1b"
+  string addr = 3;     // "127.0.0.1:7111"
+}
+message AddReplicaResponse {
+  uint64 epoch = 1;    // new shard-map epoch (0 if error)
+  string error = 2;    // "" on success
+}
+
+// Drain a backup from the map before its process is stopped. Refuses to remove
+// a node that is currently a shard's only serving replica (a primary with no
+// healthy backup) — fail over first.
+message RemoveReplicaRequest {
+  string node_id = 1;
+}
+message RemoveReplicaResponse {
+  uint64 epoch = 1;    // new shard-map epoch (0 if error)
+  string error = 2;    // "" on success
 }

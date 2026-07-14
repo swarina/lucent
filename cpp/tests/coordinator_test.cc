@@ -442,6 +442,35 @@ class CoordinatorFailoverTest : public testing::Test {
     return resp;
   }
 
+  pb::AddReplicaResponse AddReplica(uint32_t shard, const std::string& node,
+                                    const std::string& addr) {
+    grpc::ClientContext ctx;
+    pb::AddReplicaRequest req;
+    req.set_shard_id(shard);
+    req.set_node_id(node);
+    req.set_addr(addr);
+    pb::AddReplicaResponse resp;
+    EXPECT_TRUE(stub_->AddReplica(&ctx, req, &resp).ok());
+    return resp;
+  }
+
+  pb::RemoveReplicaResponse RemoveReplica(const std::string& node) {
+    grpc::ClientContext ctx;
+    pb::RemoveReplicaRequest req;
+    req.set_node_id(node);
+    pb::RemoveReplicaResponse resp;
+    EXPECT_TRUE(stub_->RemoveReplica(&ctx, req, &resp).ok());
+    return resp;
+  }
+
+  bool MapHasBackup(const pb::ClusterState& cs, uint32_t shard,
+                    const std::string& node) {
+    for (const auto& e : cs.shard_map().shards()) {
+      if (e.shard_id() == shard) return e.backup_node() == node;
+    }
+    return false;
+  }
+
   Config config_{};
   std::unique_ptr<FakeEmbed> embed_;
   std::unique_ptr<FakeShard> shard0a_, shard0b_, shard1_;
@@ -507,6 +536,112 @@ TEST_F(CoordinatorFailoverTest, AllReplicasDownBecomesUncoveredNotError) {
   const auto ids = DocIds(resp);
   EXPECT_TRUE(ids.count(3) != 0) << "shard 1 still serves";
   EXPECT_TRUE(ids.count(1) == 0 && ids.count(5) == 0) << "shard 0 fully down";
+}
+
+// ---------- Membership admin (M3-T5) ----------
+
+TEST_F(CoordinatorFailoverTest, AddReplicaAttachesBackupAndBumpsEpoch) {
+  // Shard 1 starts bare (primary only). Attach a backup.
+  const auto r = AddReplica(1, "shard-1b", "127.0.0.1:9999");
+  EXPECT_EQ(r.error(), "");
+  EXPECT_EQ(r.epoch(), 2u);  // map started at epoch 1
+
+  const auto cs = ClusterState();
+  EXPECT_EQ(cs.shard_map().epoch(), 2u);
+  EXPECT_TRUE(MapHasBackup(cs, 1, "shard-1b"));
+  bool listed_healthy = false;
+  for (const auto& n : cs.nodes()) {
+    if (n.node_id() == "shard-1b") {
+      EXPECT_EQ(n.health(), pb::HEALTH_HEALTHY);  // optimistic seed
+      listed_healthy = true;
+    }
+  }
+  EXPECT_TRUE(listed_healthy);
+}
+
+TEST_F(CoordinatorFailoverTest, AddReplicaRejectsDuplicatesAndBadShards) {
+  // Shard 0 already has a healthy backup (shard-0b).
+  EXPECT_NE(AddReplica(0, "shard-0c", "127.0.0.1:9998").error(), "");
+  // A node_id already in the map anywhere.
+  EXPECT_NE(AddReplica(1, "shard-0a", "127.0.0.1:9997").error(), "");
+  // A shard that doesn't exist.
+  EXPECT_NE(AddReplica(7, "shard-7b", "127.0.0.1:9996").error(), "");
+  // None of those mutated the map.
+  EXPECT_EQ(ClusterState().shard_map().epoch(), 1u);
+}
+
+TEST_F(CoordinatorFailoverTest, RemoveReplicaDrainsBackupButNotPrimary) {
+  // Draining shard 0's backup removes it from the map + node list.
+  const auto r = RemoveReplica("shard-0b");
+  EXPECT_EQ(r.error(), "");
+  EXPECT_EQ(r.epoch(), 2u);
+  const auto cs = ClusterState();
+  EXPECT_FALSE(MapHasBackup(cs, 0, "shard-0b"));
+  for (const auto& n : cs.nodes()) EXPECT_NE(n.node_id(), "shard-0b");
+
+  // A primary can't be drained out from under its shard.
+  EXPECT_NE(RemoveReplica("shard-0a").error(), "");
+  // An unknown node is an error, not a silent no-op.
+  EXPECT_NE(RemoveReplica("shard-9z").error(), "");
+}
+
+TEST_F(CoordinatorFailoverTest, AddedBackupIsRoutedToAndCountsAsCoverage) {
+  // Point shard 1's new backup at shard 0's primary server (doc 1) purely so
+  // there's a live gRPC endpoint to route to; we only assert coverage stays
+  // full and the added node answers, not which doc it returns.
+  AddReplica(1, "shard-1b", "127.0.0.1:" + std::to_string(shard0a_srv_.port));
+  // Round-robin means several queries; every one must be fully covered.
+  for (int i = 0; i < 4; ++i) {
+    const auto resp = Query();
+    EXPECT_EQ(resp.coverage().answered(), 2u);
+    EXPECT_EQ(resp.coverage().missing_shards_size(), 0);
+  }
+}
+
+// Boot race (regression): a primary that has never answered a health ping —
+// e.g. still loading its sealed index at startup — must NOT be failed over just
+// because the coordinator can't reach it yet. Otherwise every cold boot where a
+// primary is slower than its backup spuriously promotes the backup.
+TEST(CoordinatorBootRace, NeverHealthyPrimaryIsNotPromoted) {
+  Config cfg = Config::Load(std::string(LUCENT_REPO_ROOT) + "/cluster.yaml");
+  cfg.cluster.shards = 1;
+  cfg.model.dim = 4;
+  cfg.cluster.replicas = 1;  // no background watcher; we tick manually
+
+  FakeEmbed embed(4);
+  FakeShard backup("shard-0b", {{5, 0.9F}});
+  BoundService embed_srv = Bind(&embed);
+  BoundService backup_srv = Bind(&backup);
+
+  pb::ShardMap map;
+  map.set_epoch(1);
+  auto* e = map.add_shards();
+  e->set_shard_id(0);
+  e->set_primary_node("shard-0a");
+  e->set_primary_addr("127.0.0.1:1");  // nothing listening — "still booting"
+  e->set_primary_state(pb::NODE_STATE_LOADING);
+  e->set_backup_node("shard-0b");
+  e->set_backup_addr("127.0.0.1:" + std::to_string(backup_srv.port));
+
+  CoordinatorServer coord(cfg, map,
+                          "127.0.0.1:" + std::to_string(embed_srv.port), nullptr);
+  // Ping past the down threshold: the primary never answers, the backup does.
+  for (int i = 0; i < cfg.health.down_after_misses + 2; ++i) coord.HealthTick();
+
+  pb::ClusterState cs;
+  pb::ClusterStateRequest req;
+  ASSERT_TRUE(coord.GetClusterState(nullptr, &req, &cs).ok());
+  // Map is untouched: shard-0a is still the primary, epoch never bumped.
+  ASSERT_EQ(cs.shard_map().shards_size(), 1);
+  EXPECT_EQ(cs.shard_map().shards(0).primary_node(), "shard-0a");
+  EXPECT_EQ(cs.shard_map().epoch(), 1u);
+  // It is reported DOWN (honest), just not promoted away from.
+  for (const auto& n : cs.nodes()) {
+    if (n.node_id() == "shard-0a") EXPECT_EQ(n.health(), pb::HEALTH_DOWN);
+  }
+
+  embed_srv.server->Shutdown();
+  backup_srv.server->Shutdown();
 }
 
 }  // namespace
