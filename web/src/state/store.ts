@@ -67,6 +67,10 @@ interface LucentState {
   /** trace id the 3D inspector is open on, or null (frontend.md §5.2) */
   inspectorTrace: string | null;
 
+  /** embed model name (null until known); `fakeEmbed` drives the dev banner */
+  embedModel: string | null;
+  fakeEmbed: boolean;
+
   /** the live source (held here so any component can drive chaos/queries) */
   source: LiveSource | null;
   /** open right-click chaos menu, or null */
@@ -75,6 +79,7 @@ interface LucentState {
   chaosToast: ChaosToast | null;
 
   setSource(s: LiveSource): void;
+  setEmbedInfo(model: string | null, fake: boolean): void;
   setChaosMenu(m: ChaosMenuState | null): void;
   setChaosToast(t: ChaosToast | null): void;
   setConnected(c: boolean): void;
@@ -105,11 +110,14 @@ export const useLucent = create<LucentState>((set) => ({
   nodes: new Map(),
   clusterOpen: false,
   inspectorTrace: null,
+  embedModel: null,
+  fakeEmbed: false,
   source: null,
   chaosMenu: null,
   chaosToast: null,
 
   setSource: (source) => set({ source }),
+  setEmbedInfo: (embedModel, fakeEmbed) => set({ embedModel, fakeEmbed }),
   setChaosMenu: (chaosMenu) => set({ chaosMenu }),
   setChaosToast: (chaosToast) => set({ chaosToast }),
   setConnected: (connected) => set({ connected }),

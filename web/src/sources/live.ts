@@ -95,6 +95,12 @@ export class LiveSource {
     return (await resp.json()) as ClusterStateJson;
   }
 
+  /** Readiness + which embed model is running (fake vs real) for the UI banner. */
+  async ready(): Promise<{ ready: boolean; embedModel: string | null; fakeEmbed: boolean }> {
+    const resp = await fetch("/api/ready");
+    return (await resp.json()) as { ready: boolean; embedModel: string | null; fakeEmbed: boolean };
+  }
+
   async chaos(cmd: ChaosCmd): Promise<{ active?: string }> {
     const [path, body] =
       cmd.kind === "kill" || cmd.kind === "restart"

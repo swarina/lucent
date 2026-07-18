@@ -23,6 +23,10 @@ export function App() {
       useLucent.getState().setConnected(c);
       if (c) {
         void source.cluster().then((cl) => useLucent.getState().setCluster(cl));
+        void source
+          .ready()
+          .then((r) => useLucent.getState().setEmbedInfo(r.embedModel, r.fakeEmbed))
+          .catch(() => {});
       }
     };
     const unsub = source.onEvents((_topic, events) =>
@@ -34,6 +38,7 @@ export function App() {
 
   return (
     <div className="theater">
+      <FakeEmbedBanner />
       <QueryBar source={source} />
       <div className="mainrow">
         <Stage />
@@ -43,6 +48,26 @@ export function App() {
       <ClusterPanel />
       <InspectorOverlay />
       <ChaosMenu />
+    </div>
+  );
+}
+
+// Dev-mode warning: on the fake encoder (`--fake-embed`) the pipeline is fully
+// exercised but result *ranking* carries no semantic meaning, and HNSW visits
+// almost the whole shard (random vectors defeat pruning). Say so, so nobody
+// reads the mechanics as broken. Hidden entirely on a real model.
+function FakeEmbedBanner() {
+  const fake = useLucent((s) => s.fakeEmbed);
+  if (!fake) return null;
+  return (
+    <div className="fake-embed-banner">
+      <span className="feb-tag">fake embeddings</span>
+      <span>
+        dev mode (<code>--fake-embed</code>): the full query path is real, but
+        results aren’t semantically ranked and HNSW scans nearly the whole shard.
+        Run with the real model (<code>uv sync --extra embed</code>, then{" "}
+        <code>lucent dev</code>) for meaningful search.
+      </span>
     </div>
   );
 }

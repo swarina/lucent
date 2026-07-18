@@ -53,6 +53,34 @@ body {
   min-height: 0;
 }
 
+/* Dev-mode fake-embed warning strip (hidden on a real model). */
+.fake-embed-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+}
+.fake-embed-banner .feb-tag {
+  flex: none;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: 4px;
+}
+.fake-embed-banner code {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text);
+}
+
 /* ---- query bar ---- */
 .querybar {
   display: flex;

@@ -22,6 +22,11 @@ import {
   RemoveReplicaResponse,
 } from "./gen/lucent/v1/coordinator.js";
 import { TraceLevel } from "./gen/lucent/v1/common.js";
+import {
+  EmbedServiceClient,
+  InfoRequest,
+  InfoResponse,
+} from "./gen/lucent/v1/embed.js";
 import { Event, TraceBlob } from "./gen/lucent/v1/events.js";
 import {
   FaultRequest,
@@ -220,11 +225,34 @@ export function registerRoutes(
     },
   );
 
+  // Embed model identity, so the UI can warn when running on the fake encoder
+  // (`--fake-embed`): search still works, but results carry no semantic meaning.
+  // The model name is stable for a process's lifetime, so cache it once learned.
+  const embed = new EmbedServiceClient(
+    `127.0.0.1:${config.ports.embed}`, grpc.credentials.createInsecure());
+  let embedModel: string | null = null;
+  const fetchEmbedModel = () =>
+    new Promise<string | null>((resolve) => {
+      if (embedModel) return resolve(embedModel);
+      const deadline = new Date(Date.now() + 500);
+      embed.info(InfoRequest.create(), new grpc.Metadata(), { deadline },
+        (err: grpc.ServiceError | null, r?: InfoResponse) => {
+          if (!err && r?.model) embedModel = r.model;
+          resolve(embedModel);
+        });
+    });
+
   app.get("/api/ready", (_req, reply) => {
     coord.getClusterState(ClusterStateRequest.create(), (err) => {
-      void reply.send({
-        ready: !err,
-        collector: { events: store.size, dropsDetected: store.droppedDetected },
+      void fetchEmbedModel().then((model) => {
+        void reply.send({
+          ready: !err,
+          embedModel: model,
+          // "fake-hash" is the deterministic dev encoder (EmbedFake); anything
+          // else is a real sentence-transformer.
+          fakeEmbed: model === "fake-hash",
+          collector: { events: store.size, dropsDetected: store.droppedDetected },
+        });
       });
     });
   });
