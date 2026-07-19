@@ -220,6 +220,104 @@ def hash_partition(doc_ids: Sequence[int], shards: int) -> list[int]:
     ]
 
 
+def _kmeans_pp(vectors, k: int, seed: int, max_iter: int = 25, tol: float = 1e-4):
+    """Seeded k-means++ over normalized vectors (internals.md §3). Hand-rolled
+    in numpy — the corpus (50k×384) is trivial, and it keeps the concept visible
+    instead of hidden behind a library. Returns (centroids f32[k][dim], iters)."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    n = vectors.shape[0]
+    centers = np.empty((k, vectors.shape[1]), dtype="float32")
+    # ++ init: first centroid uniform, each next ∝ squared distance to the
+    # nearest chosen centroid (seeded, so the whole build is reproducible).
+    centers[0] = vectors[rng.integers(n)]
+    closest = np.sum((vectors - centers[0]) ** 2, axis=1)
+    for c in range(1, k):
+        total = float(closest.sum())
+        idx = int(rng.choice(n, p=closest / total)) if total > 0 else int(rng.integers(n))
+        centers[c] = vectors[idx]
+        closest = np.minimum(closest, np.sum((vectors - centers[c]) ** 2, axis=1))
+
+    iters = 0
+    for iters in range(1, max_iter + 1):
+        # assign to nearest: argmin ‖x−c‖² ≡ argmin(−2·x·c + ‖c‖²) (drop ‖x‖²)
+        d2 = -2.0 * (vectors @ centers.T) + np.sum(centers ** 2, axis=1)
+        assign = np.argmin(d2, axis=1)
+        new = centers.copy()
+        for c in range(k):
+            mask = assign == c
+            if mask.any():
+                new[c] = vectors[mask].mean(axis=0)  # empty clusters keep their center
+        shift = float(np.sqrt(np.sum((new - centers) ** 2)))
+        centers = new
+        if shift < tol:
+            break
+    return centers, iters
+
+
+def _shard_labels(assignments: Sequence[int], categories: Sequence[str],
+                  shards: int) -> dict[str, str]:
+    """Dominant category bucket per shard, e.g. {"0": "cs.*(72%)"} — the legend
+    that gives each semantic shard a visible identity in the UI."""
+    from collections import Counter
+
+    labels: dict[str, str] = {}
+    for s in range(shards):
+        buckets = Counter(bucket_of(categories[i])
+                          for i, a in enumerate(assignments) if a == s)
+        total = sum(buckets.values())
+        if total == 0:
+            labels[str(s)] = "empty"
+            continue
+        top, cnt = buckets.most_common(1)[0]
+        labels[str(s)] = f"{top}.*({round(100 * cnt / total)}%)"
+    return labels
+
+
+def semantic_partition(vectors, doc_ids: Sequence[int], categories: Sequence[str],
+                       shards: int, seed: int):
+    """k-means++ clustering with a capacity-balanced assignment (internals.md §3):
+    each doc goes to its nearest centroid unless that shard is full (cap =
+    1.3·N/k), in which case it spills to the nearest non-full one — kept balanced
+    so no shard dominates, with spills counted for the UI. Returns (assignments,
+    normalized centroids f32[k][dim], partition-meta for partition.json)."""
+    import numpy as np
+
+    vecs = np.asarray(vectors, dtype="float32")
+    n = vecs.shape[0]
+    centers, iters = _kmeans_pp(vecs, shards, seed)
+    norms = np.linalg.norm(centers, axis=1, keepdims=True)
+    centroids = (centers / np.where(norms == 0.0, 1.0, norms)).astype("float32")
+
+    cap = int(np.ceil(1.3 * n / shards))
+    sims = vecs @ centroids.T                 # (n, k); higher = nearer (normalized)
+    ranked = np.argsort(-sims, axis=1)        # nearest-first shard order per doc
+    order = np.argsort(np.asarray(doc_ids, dtype="<u8"), kind="stable")  # doc_id order
+
+    assignments = [0] * n
+    counts = [0] * shards
+    spilled = 0
+    for i in order:
+        for rank, s in enumerate(ranked[i]):
+            if counts[s] < cap:
+                assignments[i] = int(s)
+                counts[s] += 1
+                if rank > 0:
+                    spilled += 1
+                break
+        else:  # every shard at cap (rounding edge) — force the nearest
+            s = int(ranked[i][0])
+            assignments[i] = s
+            counts[s] += 1
+
+    meta = {"schema": 1, "scheme": "semantic", "k": shards, "seed": seed,
+            "iters": int(iters), "cap": cap, "sizes": counts,
+            "spilled": int(spilled),
+            "labels": _shard_labels(assignments, categories, shards)}
+    return assignments, centroids, meta
+
+
 def write_queries(docs: Sequence[dict], out_path: pathlib.Path, n: int, seed: int) -> None:
     rng = random.Random(seed)
     picks = rng.sample(range(len(docs)), min(n, len(docs)))
@@ -389,7 +487,24 @@ def run(config_path: str, corpus_path: str, n: int, seed: int | None = None,
         docs, embed_fn, cfg.paths.cache, service_model, cfg.model.dim)
     log.info("embedded (corpus_hash=%s); partitioning + loading ...", chash)
 
-    assignments = hash_partition([d["doc_id"] for d in docs], cfg.cluster.shards)
+    doc_ids = [d["doc_id"] for d in docs]
+    cfg.paths.data.mkdir(parents=True, exist_ok=True)
+    if cfg.cluster.partitioning == "semantic":
+        assignments, centroids, pmeta = semantic_partition(
+            vectors, doc_ids, [d["category"] for d in docs],
+            cfg.cluster.shards, seed)
+        centroids.tofile(cfg.paths.data / "centroids.f32")
+        (cfg.paths.data / "partition.json").write_text(
+            json.dumps(pmeta, indent=1) + "\n")
+        log.info("semantic k-means: %d iters, cap=%d, spilled=%d, sizes=%s, labels=%s",
+                 pmeta["iters"], pmeta["cap"], pmeta["spilled"], pmeta["sizes"],
+                 pmeta["labels"])
+    else:
+        assignments = hash_partition(doc_ids, cfg.cluster.shards)
+        # A stale semantic partition.json/centroids from a prior run would make
+        # the coordinator route semantically over a hash-placed corpus — remove.
+        (cfg.paths.data / "centroids.f32").unlink(missing_ok=True)
+        (cfg.paths.data / "partition.json").unlink(missing_ok=True)
     loaded = load_shards(cfg, docs, vectors, assignments)
     if projection != "none":
         try:

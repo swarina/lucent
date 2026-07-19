@@ -97,6 +97,54 @@ def test_hash_partition_deterministic_and_balanced() -> None:
         assert abs(counts[s] - 2500) < 250, counts  # within 10%
 
 
+def _clustered_vectors(rng, k=3, per=60, dim=8, spread=0.05):
+    """k well-separated blobs on the unit sphere; returns (vectors, true_label)."""
+    centers = rng.standard_normal((k, dim)).astype("float32")
+    centers /= np.linalg.norm(centers, axis=1, keepdims=True)
+    vecs, truth = [], []
+    for c in range(k):
+        pts = centers[c] + spread * rng.standard_normal((per, dim)).astype("float32")
+        pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+        vecs.append(pts)
+        truth += [c] * per
+    return np.concatenate(vecs).astype("float32"), truth
+
+
+def test_semantic_partition_deterministic_and_balanced() -> None:
+    rng = np.random.default_rng(0)
+    vecs, truth = _clustered_vectors(rng)
+    n = len(vecs)
+    cats = ["cs.LG" if t == 0 else "math.CO" if t == 1 else "hep-th" for t in truth]
+
+    a1, c1, m1 = ingest.semantic_partition(vecs, list(range(n)), cats, 3, seed=42)
+    a2, c2, m2 = ingest.semantic_partition(vecs, list(range(n)), cats, 3, seed=42)
+    assert a1 == a2 and np.array_equal(c1, c2)  # seeded → reproducible
+
+    assert len(a1) == n
+    counts = collections.Counter(a1)
+    for s in range(3):
+        assert counts[s] <= m1["cap"]  # capacity-balanced, no shard overflows
+    assert c1.shape == (3, vecs.shape[1])
+    assert np.allclose(np.linalg.norm(c1, axis=1), 1.0, atol=1e-4)  # normalized
+    assert m1["scheme"] == "semantic" and m1["k"] == 3
+    assert sum(m1["sizes"]) == n
+    assert set(m1["labels"]) == {"0", "1", "2"}
+
+
+def test_semantic_partition_recovers_separated_clusters() -> None:
+    # Tight, well-separated clusters (all fit under cap → no spill) should map
+    # almost perfectly onto shards: the whole point of semantic partitioning.
+    rng = np.random.default_rng(1)
+    vecs, truth = _clustered_vectors(rng, spread=0.02)
+    n = len(vecs)
+    a, _c, m = ingest.semantic_partition(vecs, list(range(n)), ["cs.LG"] * n, 3, seed=7)
+    assert m["spilled"] == 0
+    purity = sum(collections.Counter(truth[i] for i in range(n) if a[i] == s)
+                 .most_common(1)[0][1]
+                 for s in range(3) if s in set(a))
+    assert purity / n > 0.95, f"clustering purity {purity / n:.2f}"
+
+
 def test_embed_with_cache_roundtrip(tmp_path: pathlib.Path) -> None:
     dim = 8
     docs = [ingest.normalize_record(make_raw(i)) for i in range(20)]
