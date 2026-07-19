@@ -66,7 +66,8 @@ def oracle_topk(ids, vecs, qvecs, k: int = K):
 
 
 def run_sweep(config_path: str, ef_list: list[int], probe_list: list[int],
-              max_queries: int, out_path: pathlib.Path) -> list[ConfigResult]:
+              max_queries: int, out_path: pathlib.Path,
+              merge: bool = False) -> list[ConfigResult]:
     import grpc
     import numpy as np
 
@@ -129,6 +130,19 @@ def run_sweep(config_path: str, ef_list: list[int], probe_list: list[int],
                      probe or "all", ef, r.recall_at_10, r.p50_ms, r.p99_ms,
                      r.mean_visited)
 
+    # The partitioning dimension is swept ACROSS runs (each needs its own
+    # ingest): `--merge` keeps configs from other schemes so a hash run and a
+    # semantic run accumulate into one bench.json — the two series the chart
+    # (and the M4 gate) compare. Same-scheme configs are replaced, not doubled.
+    part = manifest["partitioning"]
+    kept: list[dict] = []
+    if merge and out_path.exists():
+        try:
+            prev = json.loads(out_path.read_text())
+            kept = [c for c in prev.get("configs", []) if c.get("partitioning") != part]
+        except (json.JSONDecodeError, OSError):
+            kept = []
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({
         "schema": 1,
@@ -137,14 +151,19 @@ def run_sweep(config_path: str, ef_list: list[int], probe_list: list[int],
         "model": manifest["model"],
         "oracle": "bruteforce-f32",
         "query_set": f"queries.json[:{len(queries)}]",
-        "configs": [vars(r) for r in results],
+        "configs": kept + [vars(r) for r in results],
     }, indent=1) + "\n")
-    log.info("wrote %s", out_path)
+    log.info("wrote %s (%d configs%s)", out_path, len(kept) + len(results),
+             f", merged with {len(kept)} from other schemes" if kept else "")
     return results
 
 
-def check_gates(results: list[ConfigResult]) -> list[str]:
-    """PLAN §7 gates that apply to a full-probe sweep. Returns failures."""
+def check_gates(results: list[ConfigResult], shards: int = 0,
+                model: str = "") -> list[str]:
+    """PLAN §7 gates. Full-probe recall/monotonicity apply to any run (they
+    compare HNSW to an oracle over identical vectors, so a fake encoder is
+    fine). The semantic P=N/2 gate only applies with a REAL encoder — see the
+    note below. Returns human-readable failures."""
     failures = []
     full = {r.ef: r for r in results if r.probe == 0}
     if 100 in full and full[100].recall_at_10 < 0.95:
@@ -156,6 +175,23 @@ def check_gates(results: list[ConfigResult]) -> list[str]:
             failures.append(
                 f"recall not ~monotonic in ef: ef={hi} ({full[hi].recall_at_10:.3f}) "
                 f"< ef={lo} ({full[lo].recall_at_10:.3f}) - 0.02")
+
+    # Semantic P=N/2 gate (PLAN §7 / M4): routing to half the shards must still
+    # recall ≥ 0.90 — the whole point of semantic partitioning is that a partial
+    # probe on the RIGHT shards keeps recall high where hash craters. This is
+    # meaningful ONLY under a real encoder: the fake hash encoder maps a query
+    # (a title) to a point unrelated to its topic, so its neighbours split
+    # evenly across clusters and no routing helps (measured: hash ≈ semantic
+    # ≈ 0.47 at P=1). Gating that would be gating noise, so we skip it — the
+    # gate is verified locally with `uv sync --extra embed`, like recall itself.
+    if model and model != "fake-hash":
+        half = max(1, shards // 2)
+        sem = [r for r in results if r.partitioning == "semantic" and r.probe == half]
+        if sem:
+            best = max(r.recall_at_10 for r in sem)
+            if best < 0.90:
+                failures.append(
+                    f"semantic recall@10 P=N/2 (probe={half}) = {best:.3f} < 0.90")
     return failures
 
 

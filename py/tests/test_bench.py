@@ -44,3 +44,27 @@ def test_gate_monotonicity() -> None:
 def test_gates_ignore_partial_probe() -> None:
     # probe sweeps legitimately trade recall; gates only judge full probe.
     assert check_gates([make(100, 0.5, probe=1)]) == []
+
+
+def make_sem(probe: int, recall: float) -> ConfigResult:
+    return ConfigResult("semantic", 2, probe, 64, recall, 1.0, 2.0, 100.0)
+
+
+def test_semantic_gate_fires_below_threshold_on_real_model() -> None:
+    # 2 shards → P=N/2 is probe=1. Under a real encoder, < 0.90 is a failure.
+    fails = check_gates([make_sem(1, 0.84)], shards=2, model="all-MiniLM-L6-v2")
+    assert len(fails) == 1 and "P=N/2" in fails[0]
+
+
+def test_semantic_gate_passes_above_threshold() -> None:
+    assert check_gates([make_sem(1, 0.93)], shards=2, model="all-MiniLM-L6-v2") == []
+
+
+def test_semantic_gate_skipped_under_fake_encoder() -> None:
+    # Fake vectors carry no topic, so semantic routing has no recall edge —
+    # gating it would gate noise. Skipped regardless of how low it is.
+    assert check_gates([make_sem(1, 0.40)], shards=2, model="fake-hash") == []
+
+
+def test_semantic_gate_skipped_without_semantic_configs() -> None:
+    assert check_gates([make(100, 0.97)], shards=2, model="all-MiniLM-L6-v2") == []
