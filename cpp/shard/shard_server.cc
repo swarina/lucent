@@ -527,6 +527,7 @@ grpc::Status ShardServer::Status(grpc::ServerContext* /*ctx*/,
   resp->set_m0(static_cast<uint32_t>(config_.index.m0));
   resp->set_ef_construction(static_cast<uint32_t>(config_.index.ef_construction));
   resp->set_seed(config_.index.seed);
+  resp->set_max_epoch_seen(max_epoch_seen_.load());
   {
     std::lock_guard<std::mutex> lock(build_mu_);
     resp->set_build_progress(staged_ids_.size());

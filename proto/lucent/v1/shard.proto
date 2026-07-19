@@ -77,6 +77,7 @@ message StatusResponse {
   uint32 ef_construction = 11;
   uint64 seed = 12;
   uint64 build_progress = 13;  // rows inserted, valid in BUILDING
+  uint64 max_epoch_seen = 14;  // highest shard-map epoch this shard has accepted
 }
 
 message TraceBlobRequest {

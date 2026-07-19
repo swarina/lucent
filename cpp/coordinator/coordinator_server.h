@@ -73,6 +73,10 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
                 uint64_t t_start_ns, uint64_t t_end_ns, uint32_t shard_id,
                 std::string detail_json);
   void HealthLoop();
+  // On boot, adopt the highest shard-map epoch any reachable shard has already
+  // accepted, so a restarted coordinator doesn't issue queries the shards
+  // reject as stale. Best-effort; runs before the server serves.
+  void ReconcileEpochFromShards();
   // Applies a ping result to a node's state machine (healthy→suspect→down),
   // emits NodeStateChange on transition, and triggers failover on primary DOWN.
   // Caller holds map_mu_.

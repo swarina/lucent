@@ -160,6 +160,7 @@ class FakeShard final : public pb::ShardService::Service {
       : node_(std::move(node)), hits_(std::move(hits)) {}
 
   void set_fail(bool fail) { fail_ = fail; }
+  void set_max_epoch_seen(uint64_t e) { max_epoch_seen_ = e; }
   uint64_t last_epoch() const { return last_epoch_; }
   uint32_t last_k() const { return last_k_; }
 
@@ -175,12 +176,21 @@ class FakeShard final : public pb::ShardService::Service {
     return grpc::Status::OK;
   }
 
+  grpc::Status Status(grpc::ServerContext*, const pb::StatusRequest*,
+                      pb::StatusResponse* resp) override {
+    resp->set_node_id(node_);
+    resp->set_state(pb::NODE_STATE_SERVING);
+    resp->set_max_epoch_seen(max_epoch_seen_);
+    return grpc::Status::OK;
+  }
+
  private:
   std::string node_;
   std::vector<std::pair<uint64_t, float>> hits_;
   std::atomic<bool> fail_{false};
   std::atomic<uint64_t> last_epoch_{0};
   std::atomic<uint32_t> last_k_{0};
+  std::atomic<uint64_t> max_epoch_seen_{0};
 };
 
 struct BoundService {
@@ -658,6 +668,94 @@ TEST(CoordinatorBootRace, NeverHealthyPrimaryIsNotPromoted) {
 
   embed_srv.server->Shutdown();
   backup_srv.server->Shutdown();
+}
+
+// ---------- Epoch reconciliation on boot (P2 fix) ----------
+
+TEST(CoordinatorEpochReconcile, AdoptsHighestEpochSeenByShardsOnBoot) {
+  // A coordinator that restarts resets to the config epoch seed; shards that
+  // already advanced past it would reject every query as stale. On boot the
+  // coordinator must poll the shards and adopt their epoch floor.
+  Config config = Config::Load(std::string(LUCENT_REPO_ROOT) + "/cluster.yaml");
+  config.cluster.shards = 2;
+  config.cluster.replicas = 1;  // no HealthWatcher thread
+  config.model.dim = 4;
+
+  FakeEmbed embed(4);
+  FakeShard shard0("shard-0a", {{1, 0.9F}});
+  FakeShard shard1("shard-1a", {{3, 0.7F}});
+  shard0.set_max_epoch_seen(5);
+  shard1.set_max_epoch_seen(9);  // the higher floor wins
+  BoundService embed_srv = Bind(&embed);
+  BoundService s0 = Bind(&shard0);
+  BoundService s1 = Bind(&shard1);
+
+  pb::ShardMap map;
+  map.set_epoch(1);  // stale config seed
+  auto add = [&](uint32_t id, int port, const std::string& node) {
+    auto* e = map.add_shards();
+    e->set_shard_id(id);
+    e->set_primary_node(node);
+    e->set_primary_addr("127.0.0.1:" + std::to_string(port));
+    e->set_primary_state(pb::NODE_STATE_SERVING);
+  };
+  add(0, s0.port, "shard-0a");
+  add(1, s1.port, "shard-1a");
+
+  // Reconciliation runs in the constructor, before the server serves.
+  CoordinatorServer coord(config, map,
+                          "127.0.0.1:" + std::to_string(embed_srv.port), nullptr);
+  BoundService coord_srv = Bind(&coord);
+  auto stub = pb::CoordinatorService::NewStub(grpc::CreateChannel(
+      "127.0.0.1:" + std::to_string(coord_srv.port),
+      grpc::InsecureChannelCredentials()));
+
+  grpc::ClientContext ctx;
+  pb::ClusterState cs;
+  ASSERT_TRUE(stub->GetClusterState(&ctx, pb::ClusterStateRequest{}, &cs).ok());
+  EXPECT_EQ(cs.shard_map().epoch(), 9u) << "should adopt the shards' epoch floor";
+
+  coord_srv.server->Shutdown();
+  s0.server->Shutdown();
+  s1.server->Shutdown();
+  embed_srv.server->Shutdown();
+}
+
+TEST(CoordinatorEpochReconcile, KeepsConfigEpochWhenShardsAreFresh) {
+  // Fresh boot: shards report epoch 0 (seen nothing) → keep the config seed.
+  Config config = Config::Load(std::string(LUCENT_REPO_ROOT) + "/cluster.yaml");
+  config.cluster.shards = 1;
+  config.cluster.replicas = 1;
+  config.model.dim = 4;
+
+  FakeEmbed embed(4);
+  FakeShard shard0("shard-0a", {{1, 0.9F}});  // max_epoch_seen defaults to 0
+  BoundService embed_srv = Bind(&embed);
+  BoundService s0 = Bind(&shard0);
+
+  pb::ShardMap map;
+  map.set_epoch(3);
+  auto* e = map.add_shards();
+  e->set_shard_id(0);
+  e->set_primary_node("shard-0a");
+  e->set_primary_addr("127.0.0.1:" + std::to_string(s0.port));
+  e->set_primary_state(pb::NODE_STATE_SERVING);
+
+  CoordinatorServer coord(config, map,
+                          "127.0.0.1:" + std::to_string(embed_srv.port), nullptr);
+  BoundService coord_srv = Bind(&coord);
+  auto stub = pb::CoordinatorService::NewStub(grpc::CreateChannel(
+      "127.0.0.1:" + std::to_string(coord_srv.port),
+      grpc::InsecureChannelCredentials()));
+
+  grpc::ClientContext ctx;
+  pb::ClusterState cs;
+  ASSERT_TRUE(stub->GetClusterState(&ctx, pb::ClusterStateRequest{}, &cs).ok());
+  EXPECT_EQ(cs.shard_map().epoch(), 3u) << "no shard advanced → keep config seed";
+
+  coord_srv.server->Shutdown();
+  s0.server->Shutdown();
+  embed_srv.server->Shutdown();
 }
 
 }  // namespace

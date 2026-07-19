@@ -64,10 +64,43 @@ CoordinatorServer::CoordinatorServer(Config config,
       rng_(std::random_device{}()) {
   embed_stub_ = lucent::v1::EmbedService::NewStub(
       grpc::CreateChannel(embed_addr, grpc::InsecureChannelCredentials()));
+  // A restarted coordinator resets its epoch to the config seed; shards that
+  // already advanced past it would reject every query as stale. Adopt their
+  // floor before serving. (Pre-M5; when Raft owns the map this goes away.)
+  ReconcileEpochFromShards();
   // Start the HealthWatcher only when there is something to fail over to
   // (replicas == 2); with a single replica per shard it would just add pings.
   if (config_.cluster.replicas >= 2) {
     health_thread_ = std::thread([this] { HealthLoop(); });
+  }
+}
+
+void CoordinatorServer::ReconcileEpochFromShards() {
+  std::vector<std::string> addrs;
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    for (const auto& e : shard_map_.shards()) {
+      if (!e.primary_addr().empty()) addrs.push_back(e.primary_addr());
+      if (!e.backup_addr().empty()) addrs.push_back(e.backup_addr());
+    }
+  }
+  uint64_t max_seen = 0;
+  for (const auto& addr : addrs) {
+    grpc::ClientContext ctx;
+    ctx.set_deadline(std::chrono::system_clock::now() +
+                     std::chrono::milliseconds(300));
+    lucent::v1::StatusResponse resp;
+    // Unreachable shards (a fresh cluster boot) are simply skipped — they've
+    // seen no epoch, so there is nothing to adopt.
+    if (ShardStub(addr)->Status(&ctx, lucent::v1::StatusRequest{}, &resp).ok()) {
+      max_seen = std::max(max_seen, resp.max_epoch_seen());
+    }
+  }
+  std::lock_guard<std::mutex> lock(map_mu_);
+  if (max_seen > shard_map_.epoch()) {
+    spdlog::warn("epoch reconcile: adopting {} from live shards (config seed {})",
+                 max_seen, shard_map_.epoch());
+    shard_map_.set_epoch(max_seen);
   }
 }
 
