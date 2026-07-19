@@ -4,7 +4,7 @@
 // scatter-gather happen. Dead shards get a red outbound pulse that fizzles;
 // unprobed shards stay dim. Linked highlighting via the shared hover state.
 
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useState } from "react";
 
 import { useLucent } from "../state/store";
 
@@ -64,6 +64,16 @@ export function Stage() {
   useEffect(() => {
     const id = setInterval(tick, 120); // glow decay
     return () => clearInterval(id);
+  }, []);
+
+  // Semantic partition legend: dominant category per shard, e.g. "cs.*(72%)".
+  // Absent under hash partitioning (endpoint 404s) → no labels shown.
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    void fetch("/api/partition")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("hash"))))
+      .then((p: { labels?: Record<string, string> }) => setLabels(p.labels ?? {}))
+      .catch(() => setLabels({}));
   }, []);
 
   const shards = cluster?.shardMap?.shards ?? [];
@@ -141,6 +151,17 @@ export function Stage() {
               dead={isMissing} dim={isUnprobed} hovered={isHover} shardId={shardId}
               onHover={setHover} onContext={onNodeContext}
             />
+            {labels[String(shardId)] && (
+              <text
+                className="shard-label"
+                x={x}
+                y={y + (Math.sin(angle) >= 0 ? 36 : -28)}
+                textAnchor="middle"
+                fill={color}
+              >
+                {labels[String(shardId)]}
+              </text>
+            )}
           </g>
         );
       })}

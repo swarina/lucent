@@ -357,6 +357,63 @@ body {
   cursor: context-menu;
 }
 
+/* Recall/latency money chart (ops panel). */
+.scatter {
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.scatter-empty {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.74rem;
+  color: var(--text-faint);
+}
+.scatter-empty code {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+.scatter-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.scatter-legend .spacer { flex: 1; }
+.scatter-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.scatter-legend .leg { display: inline-flex; align-items: center; gap: 5px; }
+.scatter-legend .swatch { width: 9px; height: 9px; border-radius: 2px; }
+.scatter-svg { width: 100%; height: auto; display: block; }
+.scatter-svg .grid { stroke: var(--line); stroke-width: 1; }
+.scatter-svg .axlabel {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+.scatter-svg .scatter-line {
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0.55;
+}
+.scatter-svg .ptlabel {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+/* Semantic shard identity label on the stage. */
+.shard-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.8;
+  pointer-events: none;
+}
+
 .cluster-grid {
   padding: 10px;
   overflow-y: auto;

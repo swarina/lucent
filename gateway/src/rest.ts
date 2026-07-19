@@ -225,6 +225,31 @@ export function registerRoutes(
     },
   );
 
+  // Serve a small JSON artifact from disk, 404 if absent (M4). One helper for
+  // both the recall/latency chart data and the semantic partition legend.
+  const serveJsonFile = async (
+    file: string, code: string, msg: string,
+    reply: import("fastify").FastifyReply,
+  ) => {
+    try {
+      return reply.header("content-type", "application/json").send(await readFile(file));
+    } catch {
+      return reply.code(404).send({ error: { code, message: msg } });
+    }
+  };
+
+  // Latest bench sweep (data-formats.md §5) — the ops-panel recall/latency
+  // scatter. bench/results/ is a sibling of the data dir.
+  const benchPath = path.resolve(config.dataDir, "..", "bench", "results", "bench.json");
+  app.get("/api/bench", (_req, reply) =>
+    serveJsonFile(benchPath, "NO_BENCH", "run `lucent bench` to produce bench.json", reply));
+
+  // Semantic partition metadata (sizes, spilled, per-shard category labels).
+  // Absent under hash partitioning.
+  app.get("/api/partition", (_req, reply) =>
+    serveJsonFile(path.join(config.dataDir, "partition.json"),
+      "NO_PARTITION", "hash partitioning (no centroids/labels)", reply));
+
   // Embed model identity, so the UI can warn when running on the fake encoder
   // (`--fake-embed`): search still works, but results carry no semantic meaning.
   // The model name is stable for a process's lifetime, so cache it once learned.

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useLucent, NodeLive } from "../state/store";
 import { presetsFor, runChaos } from "./chaos";
+import { RecallScatter } from "./RecallScatter";
 
 const SHARD_COLORS = [
   "var(--s0)", "var(--s1)", "var(--s2)", "var(--s3)",
@@ -256,6 +257,7 @@ export function ClusterPanel() {
       </div>
       <LoadGenControl />
       <ChaosControl nodeIds={chaosNodeIds} />
+      <RecallScatter />
       <div className="cluster-grid">
         {entries.length === 0 && (
           <div className="cluster-empty">waiting for node stats…</div>
