@@ -2,7 +2,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <latch>
 #include <memory>
 #include <random>
@@ -64,6 +66,9 @@ CoordinatorServer::CoordinatorServer(Config config,
       rng_(std::random_device{}()) {
   embed_stub_ = lucent::v1::EmbedService::NewStub(
       grpc::CreateChannel(embed_addr, grpc::InsecureChannelCredentials()));
+  // Semantic routing table (M4): load the k-means centroids so a probe subset
+  // lands on the shards nearest the query, not an arbitrary prefix.
+  LoadCentroids();
   // A restarted coordinator resets its epoch to the config seed; shards that
   // already advanced past it would reject every query as stale. Adopt their
   // floor before serving. (Pre-M5; when Raft owns the map this goes away.)
@@ -255,10 +260,23 @@ void CoordinatorServer::EmitSpan(const std::string& trace_id,
   emitter_->Emit(std::move(e));
 }
 
-// Health-aware planning: apply the probe knob (lowest shard_ids), then pick a
-// HEALTHY, SERVING replica per shard, round-robin across {primary, backup} for
-// read load-balancing. A shard with no healthy replica is `uncovered`.
-QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
+float CoordinatorServer::CentroidScore(uint32_t shard_id,
+                                       const std::vector<float>& qvec) const {
+  if (shard_id >= centroids_.size()) return 0.0F;
+  const std::vector<float>& c = centroids_[shard_id];
+  const size_t d = std::min(c.size(), qvec.size());
+  float s = 0.0F;
+  for (size_t i = 0; i < d; ++i) s += c[i] * qvec[i];
+  return s;
+}
+
+// Health-aware planning: pick the probe subset, then a HEALTHY, SERVING replica
+// per probed shard (round-robin across {primary, backup} for read balancing).
+// The subset order is the whole M4 point: hash → lowest shard_ids (arbitrary);
+// semantic → shards whose centroid is nearest the query (top-P by dot product),
+// so a partial probe lands on the *right* shards. No-healthy-replica → uncovered.
+QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe,
+                                            const std::vector<float>& qvec) {
   std::lock_guard<std::mutex> lock(map_mu_);
   QueryPlan plan;
   plan.epoch = shard_map_.epoch();
@@ -268,6 +286,19 @@ QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
   std::sort(entries.begin(), entries.end(),
             [](const auto* a, const auto* b) { return a->shard_id() < b->shard_id(); });
 
+  // Probe order over `entries`. Default is the shard_id order (hash); under
+  // semantic routing, stable-sort by descending centroid similarity so the
+  // shard_id order breaks ties (deterministic).
+  std::vector<size_t> order(entries.size());
+  for (size_t i = 0; i < entries.size(); ++i) order[i] = i;
+  if (semantic_routing_ && !qvec.empty()) {
+    std::vector<float> score(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i)
+      score[i] = CentroidScore(entries[i]->shard_id(), qvec);
+    std::stable_sort(order.begin(), order.end(),
+                     [&](size_t a, size_t b) { return score[a] > score[b]; });
+  }
+
   // Advance the round-robin cursor once PER QUERY (not per shard): a per-shard
   // increment would move by shard_count each query, preserving parity — so with
   // 2 replicas every shard would keep picking the *same* replica forever. One
@@ -275,9 +306,9 @@ QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
   const uint32_t base = rr_++;
   const size_t want = (probe == 0 || probe >= entries.size()) ? entries.size()
                                                               : probe;
-  for (size_t i = 0; i < entries.size(); ++i) {
-    const auto* e = entries[i];
-    if (i >= want) {
+  for (size_t rank = 0; rank < order.size(); ++rank) {
+    const auto* e = entries[order[rank]];
+    if (rank >= want) {
       plan.unprobed.push_back(e->shard_id());
       continue;
     }
@@ -295,6 +326,33 @@ QueryPlan CoordinatorServer::PlanWithHealth(uint32_t probe) {
     plan.probe.push_back(PlannedShard{e->shard_id(), r.first, r.second});
   }
   return plan;
+}
+
+void CoordinatorServer::LoadCentroids() {
+  if (config_.cluster.partitioning != "semantic") return;
+  const std::string path = config_.paths.data + "/centroids.f32";
+  std::ifstream f(path, std::ios::binary);
+  if (!f) {
+    spdlog::info("semantic routing: no centroids at {} — routing all shards", path);
+    return;
+  }
+  const size_t k = static_cast<size_t>(config_.cluster.shards);
+  const size_t dim = static_cast<size_t>(config_.model.dim);
+  std::vector<float> buf(k * dim);
+  f.read(reinterpret_cast<char*>(buf.data()),
+         static_cast<std::streamsize>(buf.size() * sizeof(float)));
+  if (static_cast<size_t>(f.gcount()) != buf.size() * sizeof(float)) {
+    spdlog::warn("semantic routing: {} is {}B, expected {}x{} floats — routing "
+                 "all shards", path, f.gcount(), k, dim);
+    return;
+  }
+  centroids_.assign(k, {});
+  for (size_t s = 0; s < k; ++s) {
+    centroids_[s].assign(buf.begin() + static_cast<long>(s * dim),
+                         buf.begin() + static_cast<long>((s + 1) * dim));
+  }
+  semantic_routing_ = true;
+  spdlog::info("semantic routing: loaded {} centroids (dim {})", k, dim);
 }
 
 grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
@@ -333,9 +391,10 @@ grpc::Status CoordinatorServer::Query(grpc::ServerContext* /*ctx*/,
     return grpc::Status(grpc::StatusCode::INTERNAL, "embed dim mismatch");
   }
 
-  // --- Plan (health-aware replica selection). ---
+  // --- Plan (health-aware replica selection; centroid routing if semantic). ---
   const uint64_t t_plan0 = MonoNanos();
-  const QueryPlan plan = PlanWithHealth(req->probe());
+  const std::vector<float> qvec(eresp.vectors().begin(), eresp.vectors().end());
+  const QueryPlan plan = PlanWithHealth(req->probe(), qvec);
   const uint64_t t_plan1 = MonoNanos();
   {
     nlohmann::json shards = nlohmann::json::array();

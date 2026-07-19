@@ -3,6 +3,8 @@
 #include <grpcpp/grpcpp.h>
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <random>
 #include <set>
@@ -756,6 +758,71 @@ TEST(CoordinatorEpochReconcile, KeepsConfigEpochWhenShardsAreFresh) {
   coord_srv.server->Shutdown();
   s0.server->Shutdown();
   embed_srv.server->Shutdown();
+}
+
+// ---------- Semantic centroid routing (M4-T2) ----------
+
+TEST(CoordinatorSemanticRouting, ProbeRoutesToNearestCentroidNotLowestShard) {
+  // Under hash partitioning, probe=1 takes the lowest shard_id (shard 0).
+  // Under semantic routing it must take the shard whose centroid is nearest the
+  // query. Centroids: shard0=[0,1,0,0], shard1=[1,0,0,0]; FakeEmbed yields the
+  // query [1,0,0,0] — so the right answer is shard 1, the *opposite* of hash.
+  Config config = Config::Load(std::string(LUCENT_REPO_ROOT) + "/cluster.yaml");
+  config.cluster.shards = 2;
+  config.cluster.replicas = 1;
+  config.model.dim = 4;
+  config.cluster.partitioning = "semantic";
+  const std::string dir = testing::TempDir() + "lucent_semroute";
+  std::filesystem::create_directories(dir);
+  config.paths.data = dir;
+  const float centroids[8] = {0, 1, 0, 0, 1, 0, 0, 0};
+  {
+    std::ofstream f(dir + "/centroids.f32", std::ios::binary);
+    f.write(reinterpret_cast<const char*>(centroids), sizeof(centroids));
+  }
+
+  FakeEmbed embed(4);
+  FakeShard shard0("shard-0a", {{1, 0.9F}});
+  FakeShard shard1("shard-1a", {{3, 0.7F}});
+  BoundService es = Bind(&embed);
+  BoundService s0 = Bind(&shard0);
+  BoundService s1 = Bind(&shard1);
+
+  pb::ShardMap map;
+  map.set_epoch(1);
+  auto add = [&](uint32_t id, int port, const std::string& node) {
+    auto* e = map.add_shards();
+    e->set_shard_id(id);
+    e->set_primary_node(node);
+    e->set_primary_addr("127.0.0.1:" + std::to_string(port));
+    e->set_primary_state(pb::NODE_STATE_SERVING);
+  };
+  add(0, s0.port, "shard-0a");
+  add(1, s1.port, "shard-1a");
+
+  CoordinatorServer coord(config, map, "127.0.0.1:" + std::to_string(es.port), nullptr);
+  BoundService cs = Bind(&coord);
+  auto stub = pb::CoordinatorService::NewStub(grpc::CreateChannel(
+      "127.0.0.1:" + std::to_string(cs.port), grpc::InsecureChannelCredentials()));
+
+  grpc::ClientContext ctx;
+  pb::QueryRequest req;
+  req.set_text("q");
+  req.set_k(3);
+  req.set_probe(1);
+  pb::QueryResponse resp;
+  ASSERT_TRUE(stub->Query(&ctx, req, &resp).ok());
+  EXPECT_EQ(resp.coverage().probed(), 1u);
+  ASSERT_EQ(resp.coverage().unprobed_shards_size(), 1);
+  EXPECT_EQ(resp.coverage().unprobed_shards(0), 0u);  // shard 0 skipped, not shard 1
+  ASSERT_GT(resp.hits_size(), 0);
+  for (const auto& h : resp.hits()) EXPECT_EQ(h.shard_id(), 1u);  // served by shard 1
+
+  cs.server->Shutdown();
+  s0.server->Shutdown();
+  s1.server->Shutdown();
+  es.server->Shutdown();
+  std::filesystem::remove_all(dir);
 }
 
 }  // namespace

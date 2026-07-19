@@ -84,8 +84,14 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
   void MaybeFailover(const std::string& down_node);  // caller holds map_mu_
   bool IsHealthy(const std::string& node_id) const;  // caller holds map_mu_
   // Build the query plan with health-aware replica selection (caller must NOT
-  // hold map_mu_ — this takes it).
-  QueryPlan PlanWithHealth(uint32_t probe);
+  // hold map_mu_ — this takes it). `qvec` is the embedded query; used only for
+  // semantic (centroid) routing, ignored under hash partitioning.
+  QueryPlan PlanWithHealth(uint32_t probe, const std::vector<float>& qvec);
+  // dot(query, centroid[shard]); 0 if no centroid. Caller holds map_mu_.
+  float CentroidScore(uint32_t shard_id, const std::vector<float>& qvec) const;
+  // Load data/centroids.f32 for semantic routing (M4). No-op under hash or if
+  // the file is absent/malformed → falls back to all-shard routing.
+  void LoadCentroids();
 
   const Config config_;
   EventEmitter* const emitter_;  // not owned; may be null in tests
@@ -96,6 +102,11 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
   lucent::v1::ShardMap shard_map_;
   std::unordered_map<std::string, NodeHealth> health_;
   uint32_t rr_ = 0;  // replica round-robin cursor (guarded by map_mu_)
+
+  // Semantic routing table (M4): centroids_[shard_id] = normalized centroid.
+  // Immutable after LoadCentroids(); empty ⇒ route all shards (hash behaviour).
+  bool semantic_routing_ = false;
+  std::vector<std::vector<float>> centroids_;
 
   std::unique_ptr<lucent::v1::EmbedService::Stub> embed_stub_;
 
