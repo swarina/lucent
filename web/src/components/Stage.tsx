@@ -150,6 +150,14 @@ export function Stage() {
         glow={glowFor(lastActivity.get("coord-0"), now)} label="coord"
         hovered={hover?.ref === "coord-0"} onHover={setHover} onContext={onNodeContext}
       />
+
+      {/* Discoverability: the chaos menu is a right-click that's otherwise
+          invisible. Only shown once there are shards to act on. */}
+      {shards.length > 0 && (
+        <text className="stage-hint" x={cx} y={H - 10} textAnchor="middle">
+          right-click any node to inject a fault
+        </text>
+      )}
     </svg>
   );
 }
@@ -190,7 +198,7 @@ function StageNode(props: {
       <text className="nodelabel" x={x} y={y + 4} textAnchor="middle">
         {label}
       </text>
-      <title>{id}</title>
+      <title>{id} — right-click for chaos (kill / restart / fault)</title>
     </g>
   );
 }

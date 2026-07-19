@@ -505,6 +505,13 @@ body {
   font-size: 11px;
   pointer-events: none;
 }
+.stage-hint {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
 
 /* ---- results ---- */
 .results {
