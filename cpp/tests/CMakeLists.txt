@@ -11,6 +11,7 @@ add_executable(lucent_common_tests
   hnsw_test.cc
   node_id_test.cc
   raft_test.cc
+  raft_storage_test.cc
   replication_test.cc
   shard_server_test.cc
   shard_storage_test.cc
