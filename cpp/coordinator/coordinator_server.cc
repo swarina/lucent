@@ -59,7 +59,8 @@ lucent::v1::ShardMap StaticShardMapFromConfig(const Config& config) {
 CoordinatorServer::CoordinatorServer(Config config,
                                      lucent::v1::ShardMap shard_map,
                                      std::string embed_addr,
-                                     EventEmitter* emitter)
+                                     EventEmitter* emitter,
+                                     std::map<std::string, std::string> raft_members)
     : config_(std::move(config)),
       emitter_(emitter),
       shard_map_(std::move(shard_map)),
@@ -69,14 +70,71 @@ CoordinatorServer::CoordinatorServer(Config config,
   // Semantic routing table (M4): load the k-means centroids so a probe subset
   // lands on the shards nearest the query, not an arbitrary prefix.
   LoadCentroids();
-  // A restarted coordinator resets its epoch to the config seed; shards that
-  // already advanced past it would reject every query as stale. Adopt their
-  // floor before serving. (Pre-M5; when Raft owns the map this goes away.)
-  ReconcileEpochFromShards();
+
+  if (!raft_members.empty()) {
+    // Raft mode (M5-T3): the shard map is the quorum's state machine. Watch it
+    // to stay authoritative, and boot-seed the config map (epoch 1) — a CAS
+    // from epoch 0 that commits on a fresh quorum and is a harmless no-op if a
+    // map already exists (a restarted coordinator just re-watches, so no
+    // epoch-reconcile is needed).
+    raft_store_ = std::make_unique<RaftStore>(std::move(raft_members));
+    raft_store_->StartWatch(0, [this](const lucent::v1::ShardMap& m) {
+      ApplyCommittedMap(m);
+    });
+    raft_seed_thread_ = std::thread([this] {
+      lucent::v1::ShardMap seed;
+      {
+        std::lock_guard<std::mutex> lock(map_mu_);
+        seed = shard_map_;
+      }
+      seed.set_epoch(1);
+      while (!health_stop_.load()) {
+        const uint64_t committed = raft_store_->Propose(seed, 0);
+        if (committed > 0) {
+          spdlog::info("raft: shard map seeded/present at epoch {}", committed);
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));  // await a leader
+      }
+    });
+  } else {
+    // Static mode (M3): a restarted coordinator resets its epoch to the config
+    // seed; shards that advanced past it reject queries as stale, so adopt
+    // their floor before serving.
+    ReconcileEpochFromShards();
+  }
+
   // Start the HealthWatcher only when there is something to fail over to
   // (replicas == 2); with a single replica per shard it would just add pings.
   if (config_.cluster.replicas >= 2) {
     health_thread_ = std::thread([this] { HealthLoop(); });
+  }
+}
+
+// A committed map arrived from the quorum (Watch). Install it if it's newer,
+// seed health for any node we haven't seen, and surface a RaftEvent for the UI.
+void CoordinatorServer::ApplyCommittedMap(const lucent::v1::ShardMap& m) {
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    if (m.epoch() < shard_map_.epoch()) return;
+    shard_map_ = m;
+    SeedHealthForMap();
+  }
+  spdlog::info("raft: applied committed shard map epoch {}", m.epoch());
+  if (emitter_ != nullptr) {
+    lucent::v1::Event ev;
+    auto* r = ev.mutable_raft();
+    r->set_role("coordinator");
+    r->set_detail("shard map -> epoch " + std::to_string(m.epoch()));
+    emitter_->Emit(std::move(ev));
+  }
+}
+
+void CoordinatorServer::SeedHealthForMap() {  // caller holds map_mu_
+  for (const auto& e : shard_map_.shards()) {
+    for (const std::string& n : {e.primary_node(), e.backup_node()}) {
+      if (!n.empty()) health_.try_emplace(n, NodeHealth{});
+    }
   }
 }
 
@@ -112,6 +170,8 @@ void CoordinatorServer::ReconcileEpochFromShards() {
 CoordinatorServer::~CoordinatorServer() {
   health_stop_.store(true);
   if (health_thread_.joinable()) health_thread_.join();
+  if (raft_seed_thread_.joinable()) raft_seed_thread_.join();
+  if (raft_store_) raft_store_->Stop();  // stops the Watch thread
 }
 
 void CoordinatorServer::HealthLoop() {
@@ -145,6 +205,62 @@ void CoordinatorServer::HealthTick() {
     std::lock_guard<std::mutex> lock(map_mu_);
     RecordHealth(node_id, alive);
   }
+  // Raft mode: promotions detected above were deferred (Propose blocks and must
+  // run without map_mu_ held). Drain and propose them now, off the locked path.
+  if (raft()) {
+    std::set<std::string> todo;
+    {
+      std::lock_guard<std::mutex> lock(map_mu_);
+      todo.swap(pending_failover_);
+    }
+    for (const std::string& down : todo) ProposeFailover(down);
+  }
+}
+
+// Build the promoted map (swap primary↔backup for the shard whose primary is
+// `down_node`) and push it through the quorum. The committed map returns via
+// Watch → ApplyCommittedMap. Caller must NOT hold map_mu_.
+void CoordinatorServer::ProposeFailover(const std::string& down_node) {
+  lucent::v1::ShardMap proposed;
+  uint64_t expected = 0;
+  std::string new_primary;
+  uint32_t shard_id = 0;
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    proposed = shard_map_;
+    expected = proposed.epoch();
+    bool changed = false;
+    for (auto& e : *proposed.mutable_shards()) {
+      if (e.primary_node() != down_node) continue;
+      if (e.backup_node().empty() || !IsHealthy(e.backup_node())) break;
+      const std::string old_p = e.primary_node();
+      const std::string old_paddr = e.primary_addr();
+      e.set_primary_node(e.backup_node());
+      e.set_primary_addr(e.backup_addr());
+      e.set_backup_node(old_p);
+      e.set_backup_addr(old_paddr);
+      new_primary = e.primary_node();
+      shard_id = e.shard_id();
+      changed = true;
+      break;
+    }
+    if (!changed) return;
+    proposed.set_epoch(expected + 1);
+  }
+  const uint64_t committed = raft_store_->Propose(proposed, expected);
+  if (committed == expected + 1) {
+    spdlog::warn("FAILOVER (raft) shard {}: {} -> {} (epoch {})", shard_id,
+                 down_node, new_primary, committed);
+    if (emitter_ != nullptr) {
+      lucent::v1::Event ev;
+      auto* f = ev.mutable_failover();
+      f->set_shard_id(shard_id);
+      f->set_old_primary(down_node);
+      f->set_new_primary(new_primary);
+      f->set_new_epoch(committed);
+      emitter_->Emit(std::move(ev));
+    }
+  }  // else: lost the CAS (someone else changed the map) — Watch has the truth.
 }
 
 bool CoordinatorServer::IsHealthy(const std::string& node_id) const {
@@ -178,6 +294,19 @@ void CoordinatorServer::RecordHealth(const std::string& node_id, bool alive) {
 // A primary going DOWN with a healthy backup hands the shard over: swap roles,
 // bump the map epoch, emit FailoverExecuted. Caller holds map_mu_.
 void CoordinatorServer::MaybeFailover(const std::string& down_node) {
+  // Raft mode: the map is the quorum's state machine — don't mutate it here (we
+  // hold map_mu_ and Propose blocks on the network). Defer to HealthTick, which
+  // proposes the promotion without the lock held.
+  if (raft()) {
+    for (const auto& e : shard_map_.shards()) {
+      if (e.primary_node() == down_node && !e.backup_node().empty() &&
+          IsHealthy(e.backup_node())) {
+        pending_failover_.insert(down_node);
+        return;
+      }
+    }
+    return;
+  }
   for (auto& e : *shard_map_.mutable_shards()) {
     if (e.primary_node() != down_node) continue;
     if (e.backup_node().empty() || !IsHealthy(e.backup_node())) return;
@@ -205,16 +334,22 @@ void CoordinatorServer::MaybeFailover(const std::string& down_node) {
 
 void CoordinatorServer::SetHealthForTest(const std::string& node_id,
                                          lucent::v1::HealthState state) {
-  std::lock_guard<std::mutex> lock(map_mu_);
-  NodeHealth& h = health_[node_id];
-  h.state = state;
-  h.misses = state == lucent::v1::HEALTH_DOWN      ? config_.health.down_after_misses
-             : state == lucent::v1::HEALTH_SUSPECT ? config_.health.suspect_after_misses
-                                                   : 0;
-  // The seam models a node that has been in service; forcing it DOWN therefore
-  // represents a real failure (which may promote a backup), not a boot no-show.
-  h.ever_healthy = true;
-  if (state == lucent::v1::HEALTH_DOWN) MaybeFailover(node_id);
+  std::set<std::string> todo;
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    NodeHealth& h = health_[node_id];
+    h.state = state;
+    h.misses = state == lucent::v1::HEALTH_DOWN      ? config_.health.down_after_misses
+               : state == lucent::v1::HEALTH_SUSPECT ? config_.health.suspect_after_misses
+                                                     : 0;
+    // The seam models a node that has been in service; forcing it DOWN
+    // represents a real failure (may promote a backup), not a boot no-show.
+    h.ever_healthy = true;
+    if (state == lucent::v1::HEALTH_DOWN) MaybeFailover(node_id);
+    if (raft()) todo.swap(pending_failover_);  // drain the deferred promotion
+  }
+  // Raft mode: propose the promotion off the lock (mirrors HealthTick).
+  for (const std::string& down : todo) ProposeFailover(down);
 }
 
 lucent::v1::ShardService::Stub* CoordinatorServer::ShardStub(
@@ -552,34 +687,47 @@ grpc::Status CoordinatorServer::AddReplica(
     resp->set_error("node_id and addr are required");
     return grpc::Status::OK;
   }
-  std::lock_guard<std::mutex> lock(map_mu_);
-  lucent::v1::ShardMapEntry* target = nullptr;
-  for (auto& e : *shard_map_.mutable_shards()) {
-    if (e.shard_id() == req->shard_id()) target = &e;
-    // Guard against a node_id already live anywhere in the map.
-    if (e.primary_node() == req->node_id() || e.backup_node() == req->node_id()) {
-      resp->set_error("node " + req->node_id() + " is already in the map");
+  lucent::v1::ShardMap proposed;
+  uint64_t expected = 0;
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    proposed = shard_map_;
+    expected = proposed.epoch();
+    lucent::v1::ShardMapEntry* target = nullptr;
+    for (auto& e : *proposed.mutable_shards()) {
+      if (e.shard_id() == req->shard_id()) target = &e;
+      // Guard against a node_id already live anywhere in the map.
+      if (e.primary_node() == req->node_id() || e.backup_node() == req->node_id()) {
+        resp->set_error("node " + req->node_id() + " is already in the map");
+        return grpc::Status::OK;
+      }
+    }
+    if (target == nullptr) {
+      resp->set_error("no such shard " + std::to_string(req->shard_id()));
+      return grpc::Status::OK;
+    }
+    if (!target->backup_node().empty() && IsHealthy(target->backup_node())) {
+      resp->set_error("shard " + std::to_string(req->shard_id()) +
+                      " already has a healthy backup");
+      return grpc::Status::OK;
+    }
+    target->set_backup_node(req->node_id());
+    target->set_backup_addr(req->addr());
+    target->set_backup_state(lucent::v1::NODE_STATE_SERVING);
+    proposed.set_epoch(expected + 1);
+    if (!raft()) {  // static mode: commit locally (M3-T5 behaviour)
+      shard_map_ = proposed;
+      health_[req->node_id()] = NodeHealth{lucent::v1::HEALTH_HEALTHY, 0};
+      resp->set_epoch(shard_map_.epoch());
+      spdlog::info("ADD REPLICA shard {}: backup <- {} ({}) (epoch {})",
+                   req->shard_id(), req->node_id(), req->addr(), shard_map_.epoch());
       return grpc::Status::OK;
     }
   }
-  if (target == nullptr) {
-    resp->set_error("no such shard " + std::to_string(req->shard_id()));
-    return grpc::Status::OK;
-  }
-  if (!target->backup_node().empty() && IsHealthy(target->backup_node())) {
-    resp->set_error("shard " + std::to_string(req->shard_id()) +
-                    " already has a healthy backup");
-    return grpc::Status::OK;
-  }
-  target->set_backup_node(req->node_id());
-  target->set_backup_addr(req->addr());
-  target->set_backup_state(lucent::v1::NODE_STATE_SERVING);
-  // Seed optimistic health; the HealthWatcher's next ping confirms/demotes.
-  health_[req->node_id()] = NodeHealth{lucent::v1::HEALTH_HEALTHY, 0};
-  shard_map_.set_epoch(shard_map_.epoch() + 1);
-  resp->set_epoch(shard_map_.epoch());
-  spdlog::info("ADD REPLICA shard {}: backup <- {} ({}) (epoch {})",
-               req->shard_id(), req->node_id(), req->addr(), shard_map_.epoch());
+  // Raft mode: propose the change; Watch installs the committed map + health.
+  const uint64_t committed = raft_store_->Propose(proposed, expected);
+  if (committed == expected + 1) resp->set_epoch(committed);
+  else resp->set_error("propose failed (not leader or CAS lost)");
   return grpc::Status::OK;
 }
 
@@ -590,28 +738,46 @@ grpc::Status CoordinatorServer::RemoveReplica(
     resp->set_error("node_id is required");
     return grpc::Status::OK;
   }
-  std::lock_guard<std::mutex> lock(map_mu_);
-  for (auto& e : *shard_map_.mutable_shards()) {
-    if (e.backup_node() == req->node_id()) {
-      e.clear_backup_node();
-      e.clear_backup_addr();
-      e.set_backup_state(lucent::v1::NODE_STATE_UNSPECIFIED);
-      health_.erase(req->node_id());
-      shard_map_.set_epoch(shard_map_.epoch() + 1);
-      resp->set_epoch(shard_map_.epoch());
-      spdlog::info("REMOVE REPLICA shard {}: backup {} drained (epoch {})",
-                   e.shard_id(), req->node_id(), shard_map_.epoch());
+  lucent::v1::ShardMap proposed;
+  uint64_t expected = 0;
+  bool found = false;
+  {
+    std::lock_guard<std::mutex> lock(map_mu_);
+    proposed = shard_map_;
+    expected = proposed.epoch();
+    for (auto& e : *proposed.mutable_shards()) {
+      if (e.backup_node() == req->node_id()) {
+        e.clear_backup_node();
+        e.clear_backup_addr();
+        e.set_backup_state(lucent::v1::NODE_STATE_UNSPECIFIED);
+        found = true;
+        break;
+      }
+      if (e.primary_node() == req->node_id()) {
+        // Removing a primary would strand the shard unless a healthy backup can
+        // take over first — refuse and let the operator fail over.
+        resp->set_error("node " + req->node_id() + " is the primary of shard " +
+                        std::to_string(e.shard_id()) + "; fail over before removing");
+        return grpc::Status::OK;
+      }
+    }
+    if (!found) {
+      resp->set_error("node " + req->node_id() + " is not in the map");
       return grpc::Status::OK;
     }
-    if (e.primary_node() == req->node_id()) {
-      // Removing a primary would strand the shard unless a healthy backup can
-      // take over first — refuse and let the operator fail over.
-      resp->set_error("node " + req->node_id() + " is the primary of shard " +
-                      std::to_string(e.shard_id()) + "; fail over before removing");
+    proposed.set_epoch(expected + 1);
+    if (!raft()) {  // static mode
+      shard_map_ = proposed;
+      health_.erase(req->node_id());
+      resp->set_epoch(shard_map_.epoch());
+      spdlog::info("REMOVE REPLICA: backup {} drained (epoch {})",
+                   req->node_id(), shard_map_.epoch());
       return grpc::Status::OK;
     }
   }
-  resp->set_error("node " + req->node_id() + " is not in the map");
+  const uint64_t committed = raft_store_->Propose(proposed, expected);
+  if (committed == expected + 1) resp->set_epoch(committed);
+  else resp->set_error("propose failed (not leader or CAS lost)");
   return grpc::Status::OK;
 }
 

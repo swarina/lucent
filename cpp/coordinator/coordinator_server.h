@@ -2,9 +2,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <random>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -15,6 +17,7 @@
 #include "common/config.h"
 #include "common/event_emitter.h"
 #include "coordinator/planner.h"
+#include "coordinator/raft_store.h"
 #include "lucent/v1/coordinator.grpc.pb.h"
 #include "lucent/v1/embed.grpc.pb.h"
 #include "lucent/v1/shard.grpc.pb.h"
@@ -27,10 +30,15 @@ namespace lucent {
 // (callback-API async fan-out lands with M2 where it matters).
 class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
  public:
-  // `shard_map` is the static M0 membership (synthesized from config or a
-  // shardmap.json); `embed_addr` the embed service target.
+  // `shard_map` is the boot-seed membership (synthesized from config); on Raft
+  // mode (`raft_members` non-empty: member id → "host:port") it is proposed as
+  // epoch 1 if the quorum is empty, and thereafter the committed map from the
+  // quorum is authoritative — the coordinator watches it and proposes every
+  // change (failover, add/remove) through consensus instead of mutating locally
+  // (M5-T3). Empty `raft_members` → static mode (M3 behaviour, unchanged).
   CoordinatorServer(Config config, lucent::v1::ShardMap shard_map,
-                    std::string embed_addr, EventEmitter* emitter);
+                    std::string embed_addr, EventEmitter* emitter,
+                    std::map<std::string, std::string> raft_members = {});
   ~CoordinatorServer();
 
   grpc::Status Query(grpc::ServerContext* ctx,
@@ -83,6 +91,14 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
   void RecordHealth(const std::string& node_id, bool alive);
   void MaybeFailover(const std::string& down_node);  // caller holds map_mu_
   bool IsHealthy(const std::string& node_id) const;  // caller holds map_mu_
+  // Raft mode (M5-T3). ApplyCommittedMap installs a map delivered by Watch;
+  // ProposeFailover/ProposeMapChange push a change through consensus (caller
+  // must NOT hold map_mu_). SeedHealthForMap adds optimistic health for any
+  // new node (caller holds map_mu_).
+  void ApplyCommittedMap(const lucent::v1::ShardMap& m);
+  void ProposeFailover(const std::string& down_node);
+  void SeedHealthForMap();
+  bool raft() const { return raft_store_ != nullptr; }
   // Build the query plan with health-aware replica selection (caller must NOT
   // hold map_mu_ — this takes it). `qvec` is the embedded query; used only for
   // semantic (centroid) routing, ignored under hash partitioning.
@@ -103,6 +119,13 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
   std::unordered_map<std::string, NodeHealth> health_;
   uint32_t rr_ = 0;  // replica round-robin cursor (guarded by map_mu_)
 
+  // Raft-backed membership (M5-T3). When set, the shard map is the Raft state
+  // machine: Watch keeps shard_map_ authoritative, and every change is proposed
+  // through the quorum. `pending_failover_` defers promotions off the locked
+  // HealthWatcher path so the blocking Propose runs without map_mu_ held.
+  std::unique_ptr<RaftStore> raft_store_;
+  std::set<std::string> pending_failover_;  // guarded by map_mu_
+
   // Semantic routing table (M4): centroids_[shard_id] = normalized centroid.
   // Immutable after LoadCentroids(); empty ⇒ route all shards (hash behaviour).
   bool semantic_routing_ = false;
@@ -119,6 +142,7 @@ class CoordinatorServer final : public lucent::v1::CoordinatorService::Service {
   std::mt19937_64 rng_;
 
   std::thread health_thread_;
+  std::thread raft_seed_thread_;  // boot-seed proposer (Raft mode)
   std::atomic<bool> health_stop_{false};
 };
 

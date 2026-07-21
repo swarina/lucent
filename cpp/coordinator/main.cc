@@ -6,7 +6,9 @@
 
 #include <atomic>
 #include <csignal>
+#include <map>
 #include <memory>
+#include <utility>
 #include <string>
 #include <thread>
 
@@ -49,9 +51,24 @@ int main(int argc, char** argv) {
   lucent::CollectorSink sink(config.CollectorAddr(), identity->id);
   lucent::EventEmitter emitter(identity->id, sink.Fn());
 
+  // --raft: the shard map is owned by the mini-Raft quorum (M5). Build the
+  // 3-voter membership from config; empty map ⇒ static mode (M3 behaviour).
+  std::map<std::string, std::string> raft_members;
+  bool raft = false;
+  for (int i = 1; i < argc; ++i)
+    if (std::string(argv[i]) == "--raft") raft = true;
+  if (raft) {
+    for (int k = 0; k < 3; ++k) {
+      raft_members["member-" + std::to_string(k)] =
+          "127.0.0.1:" + std::to_string(config.ports.member_base + k);
+    }
+    spdlog::info("{}: raft mode — shard map from the member quorum", identity->id);
+  }
+
   lucent::CoordinatorServer service(config,
                                     lucent::StaticShardMapFromConfig(config),
-                                    config.EmbedAddr(), &emitter);
+                                    config.EmbedAddr(), &emitter,
+                                    std::move(raft_members));
 
   const std::string addr = "127.0.0.1:" + std::to_string(port);
   grpc::ServerBuilder builder;

@@ -6,6 +6,7 @@ add_executable(lucent_common_tests
   brute_force_test.cc
   config_test.cc
   coordinator_test.cc
+  coordinator_raft_test.cc
   event_emitter_test.cc
   hnsw_io_test.cc
   hnsw_test.cc

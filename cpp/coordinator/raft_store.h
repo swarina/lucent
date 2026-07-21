@@ -48,6 +48,7 @@ class RaftStore {
 
  private:
   lucent::v1::MembershipService::Stub* StubFor(const std::string& id);
+  std::string NextMember(const std::string& cur) const;  // round-robin over ids
   void WatchLoop(uint64_t from_epoch,
                  std::function<void(const lucent::v1::ShardMap&)> on_map);
 

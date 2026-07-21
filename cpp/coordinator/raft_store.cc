@@ -3,6 +3,8 @@
 #include <spdlog/spdlog.h>
 
 #include <chrono>
+#include <iterator>
+#include <thread>
 #include <utility>
 
 namespace lucent {
@@ -38,23 +40,42 @@ uint64_t RaftStore::Propose(const pb::ShardMap& proposed, uint64_t expected_epoc
     std::lock_guard<std::mutex> lk(stubs_mu_);
     target = last_leader_;
   }
-  // Follow a NOT_LEADER redirect a few hops (leader may be mid-election).
-  for (int hop = 0; hop < 5; ++hop) {
+  // Try a bounded number of hops: follow a NOT_LEADER redirect, and — crucially
+  // — step to a different member if the target is unreachable (the sticky
+  // last-leader may be the one that just died). Enough hops to survive an
+  // election in flight.
+  for (int hop = 0; hop < 12; ++hop) {
     pb::MembershipService::Stub* stub = StubFor(target);
     if (stub == nullptr) return 0;
     grpc::ClientContext ctx;
-    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(2));
     pb::ProposeResponse resp;
-    if (!stub->Propose(&ctx, mut, &resp).ok()) return 0;
+    const grpc::Status st = stub->Propose(&ctx, mut, &resp);
+    if (!st.ok()) {  // dead / unreachable → try the next member
+      target = NextMember(target);
+      continue;
+    }
     if (resp.committed()) {
       std::lock_guard<std::mutex> lk(stubs_mu_);
       last_leader_ = target;  // remember who committed it
       return resp.epoch();
     }
-    if (resp.leader_hint().empty()) return 0;  // no leader known yet
-    target = resp.leader_hint();
+    if (!resp.leader_hint().empty()) {
+      target = resp.leader_hint();  // redirect to the known leader
+    } else {
+      target = NextMember(target);  // no leader yet → poll another member
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
   }
   return 0;
+}
+
+std::string RaftStore::NextMember(const std::string& cur) const {
+  auto it = members_.find(cur);
+  if (it == members_.end() || std::next(it) == members_.end()) {
+    return members_.begin()->first;  // wrap around
+  }
+  return std::next(it)->first;
 }
 
 void RaftStore::StartWatch(uint64_t from_epoch,
