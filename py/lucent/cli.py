@@ -126,10 +126,17 @@ def bench(config: str, ef: str, probe: str, queries: int, out: str,
 
 
 @main.command()
+@click.option("--config", default="cluster.yaml", show_default=True)
 @click.option("--out", default="bundle", show_default=True)
-def record(out: str) -> None:
-    """Record a live cluster session into a replay bundle."""
-    _todo("M6-T2")
+def record(config: str, out: str) -> None:
+    """Record a live cluster session into a replay bundle (M6)."""
+    try:
+        from lucent import record as record_mod
+    except ImportError as e:
+        click.secho(f"missing dependency: {e}", fg="red", err=True)
+        click.echo("install with: uv sync --extra dev", err=True)
+        sys.exit(1)
+    record_mod.run(config, out)
 
 
 @main.command()

@@ -20,6 +20,7 @@ dev = [
   "pytest>=8.0",
   "grpcio-tools>=1.60",
   "numpy>=1.26",
+  "websockets>=12.0",  # `lucent record` taps the gateway's live WS stream (M6)
 ]
 ingest = [
   "numpy>=1.26",
