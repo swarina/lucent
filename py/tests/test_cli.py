@@ -16,6 +16,9 @@ def test_version() -> None:
     assert "lucent" in result.output
 
 
-def test_unimplemented_command_exits_nonzero() -> None:
-    result = CliRunner().invoke(main, ["record"])  # lands at M6-T2
-    assert result.exit_code == 2
+def test_record_is_implemented() -> None:
+    # Every command is now real (record was the last stub, M6-T2). Its help
+    # exposes the bundle options rather than a "not implemented" stub.
+    result = CliRunner().invoke(main, ["record", "--help"])
+    assert result.exit_code == 0
+    assert "--out" in result.output and "--config" in result.output
