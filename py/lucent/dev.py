@@ -76,16 +76,21 @@ def find_binary(repo_root: pathlib.Path, name: str, subdir: str) -> str:
 
 def build_specs(
     repo_root: pathlib.Path, config_path: pathlib.Path, cfg, replicas: int,
-    fake_embed: bool = False,
+    fake_embed: bool = False, raft: bool = False,
 ) -> list[ProcSpec]:
     """Process set for the cluster. Replica 'b' processes spawn only when
-    replicas=2 (they idle EMPTY until replication lands at M3)."""
+    replicas=2. With `raft`, three lucent-member voters own the shard map and
+    the coordinator runs in --raft mode (M5)."""
     lucent_bin = str(pathlib.Path(sys.executable).parent / "lucent")
     shard_bin = find_binary(repo_root, "lucent-shard", "shard")
     coord_bin = find_binary(repo_root, "lucent-coord", "coordinator")
     gateway_js = repo_root / "gateway" / "dist" / "index.js"
     if not gateway_js.exists():
         raise FileNotFoundError(f"{gateway_js} missing — run: cd gateway && npm run build")
+
+    coord_argv = [coord_bin, "--node-id", "coord-0", "--config", str(config_path)]
+    if raft:
+        coord_argv.append("--raft")
 
     embed_argv = [lucent_bin, "embedsvc", "--config", str(config_path)]
     if fake_embed:
@@ -96,10 +101,18 @@ def build_specs(
                  ["node", str(gateway_js), "--config", str(config_path),
                   "--web-dist", str(repo_root / "web" / "dist")],
                  cfg.ports.gateway_http),
-        ProcSpec("coord-0", "coordinator",
-                 [coord_bin, "--node-id", "coord-0", "--config", str(config_path)],
-                 cfg.ports.coordinator),
+        ProcSpec("coord-0", "coordinator", coord_argv, cfg.ports.coordinator),
     ]
+    # Raft voters start before the coordinator seeds the map (order is a hint;
+    # the coordinator's boot-seed retries until a leader exists regardless).
+    if raft:
+        member_bin = find_binary(repo_root, "lucent-member", "raft")
+        for j in range(3):
+            node = f"member-{j}"
+            specs.append(ProcSpec(node, "member",
+                                  [member_bin, "--node-id", node,
+                                   "--config", str(config_path)],
+                                  cfg.ports.member_base + j))
     for s in range(cfg.cluster.shards):
         for r in ("a", "b")[: replicas]:
             node = f"shard-{s}{r}"
@@ -306,7 +319,7 @@ def make_control_handler(sup: Supervisor):
 
 
 def run_dev(config_path: str, shards: int, replicas: int, partitioning: str,
-            fake_embed: bool = False) -> int:
+            fake_embed: bool = False, raft: bool = False) -> int:
     """Blocking `lucent dev` entrypoint. Returns exit code."""
     from lucent import config as config_mod
 
@@ -326,7 +339,8 @@ def run_dev(config_path: str, shards: int, replicas: int, partitioning: str,
     derived.write_text(yaml.safe_dump(raw, sort_keys=False))
 
     cfg = config_mod.load(derived)
-    specs = build_specs(repo_root, derived, cfg, replicas, fake_embed=fake_embed)
+    specs = build_specs(repo_root, derived, cfg, replicas,
+                        fake_embed=fake_embed, raft=raft)
     # Resolve the data root the same way the shards do (paths.data vs the shared
     # cwd) so a spawned backup can copy the primary's sealed dir.
     shard_bin = find_binary(repo_root, "lucent-shard", "shard")

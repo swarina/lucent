@@ -42,13 +42,15 @@ def main() -> None:
 @click.option("--config", default="cluster.yaml", show_default=True)
 @click.option("--fake-embed", is_flag=True,
               help="Use the deterministic no-model encoder (CI / fast dev).")
+@click.option("--raft", is_flag=True,
+              help="Run 3 mini-Raft voters that own the shard map (M5).")
 def dev(shards: int, replicas: int, partitioning: str, config: str,
-        fake_embed: bool) -> None:
+        fake_embed: bool, raft: bool) -> None:
     """Spin up a local multi-process cluster (supervisor, blocking)."""
     from lucent import dev as dev_mod
 
     sys.exit(dev_mod.run_dev(config, shards, replicas, partitioning,
-                             fake_embed=fake_embed))
+                             fake_embed=fake_embed, raft=raft))
 
 
 @main.command()

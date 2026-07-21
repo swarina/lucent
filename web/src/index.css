@@ -357,6 +357,76 @@ body {
   cursor: context-menu;
 }
 
+/* Mini-Raft election viz (ops panel). */
+.raft-panel {
+  padding: 9px 14px 11px;
+  border-bottom: 1px solid var(--line);
+}
+.raft-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+.raft-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.raft-head .dim { font-size: 0.72rem; color: var(--text-dim); }
+.raft-members { display: flex; gap: 8px; }
+.raft-member {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font-size: 0.74rem;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.raft-member .raft-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+.raft-member .raft-id { color: var(--text); }
+.raft-member .raft-role {
+  margin-left: auto;
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.raft-member.raft-leader {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 35%, transparent),
+              0 0 12px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+.raft-member.raft-leader .raft-dot {
+  background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
+}
+.raft-member.raft-leader .raft-role { color: var(--warn); }
+.raft-member.raft-candidate {
+  border-color: color-mix(in srgb, var(--trace-a) 45%, var(--line));
+}
+.raft-member.raft-candidate .raft-dot { background: var(--trace-a); animation: raft-pulse 0.6s ease-in-out infinite; }
+.raft-member.raft-candidate .raft-role { color: var(--trace-a); }
+.raft-member.raft-down {
+  opacity: 0.45;
+  border-color: color-mix(in srgb, var(--down) 40%, var(--line));
+}
+.raft-member.raft-down .raft-dot { background: var(--down); }
+.raft-member.raft-down .raft-role { color: var(--down); }
+@keyframes raft-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .raft-member.raft-candidate .raft-dot { animation: none; }
+}
+
 /* Recall/latency money chart (ops panel). */
 .scatter {
   padding: 10px 14px 12px;

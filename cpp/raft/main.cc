@@ -54,7 +54,8 @@ int main(int argc, char** argv) {
   // Seed the election timer off the node index so the three don't all fire at
   // once — deterministic per node, like the sim.
   lucent::raft::MemberServer member(node_id, members, dir,
-                                    static_cast<uint64_t>(j) + 1);
+                                    static_cast<uint64_t>(j) + 1,
+                                    config.CollectorAddr());
   if (!member.Start("127.0.0.1:" + std::to_string(port))) {
     spdlog::error("{}: failed to bind port {}", node_id, port);
     return 1;

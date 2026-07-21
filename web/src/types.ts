@@ -73,6 +73,7 @@ export interface EventJson {
   stats?: NodeStatsJson;
   state?: { from?: string; to?: string; reason?: string };
   build?: BuildProgressJson;
+  raft?: { term?: string; role?: string; leader?: string; detail?: string };
 }
 
 export interface ShardMapEntryJson {

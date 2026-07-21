@@ -26,6 +26,13 @@ export interface ChaosToast {
   error: boolean;
 }
 
+export interface RaftMember {
+  role: string;  // follower | candidate | leader
+  term: number;
+  leader: string;
+  seen: number;  // performance.now() of the last RaftEvent — staleness → "down"
+}
+
 export interface NodeLive {
   stats: NodeStatsJson | null;
   /** rolling RSS samples (bytes) for a sparkline, newest last */
@@ -63,6 +70,9 @@ interface LucentState {
   /** live per-node stats/build (metrics + cluster topics) */
   nodes: Map<string, NodeLive>;
   clusterOpen: boolean;
+
+  /** live mini-Raft member states from RaftEvents (M5): id -> role/term/leader */
+  raft: Map<string, RaftMember>;
 
   /** trace id the 3D inspector is open on, or null (frontend.md §5.2) */
   inspectorTrace: string | null;
@@ -109,6 +119,7 @@ export const useLucent = create<LucentState>((set) => ({
   hover: null,
   nodes: new Map(),
   clusterOpen: false,
+  raft: new Map(),
   inspectorTrace: null,
   embedModel: null,
   fakeEmbed: false,
@@ -131,6 +142,7 @@ export const useLucent = create<LucentState>((set) => ({
       const spansByTrace = new Map(state.spansByTrace);
       const lastActivity = new Map(state.lastActivity);
       const nodes = new Map(state.nodes);
+      const raft = new Map(state.raft);
       const now = performance.now();
 
       const live = (id: string): NodeLive =>
@@ -167,12 +179,20 @@ export const useLucent = create<LucentState>((set) => ({
           if (e.state.to === "NODE_STATE_SERVING") n.build = null;
           nodes.set(e.nodeId, n);
         }
+        if (e.raft) {
+          raft.set(e.nodeId, {
+            role: e.raft.role ?? "follower",
+            term: Number(e.raft.term ?? 0),
+            leader: e.raft.leader ?? "",
+            seen: now,
+          });
+        }
       }
       while (spansByTrace.size > MAX_TRACES) {
         const oldest = spansByTrace.keys().next().value as string;
         spansByTrace.delete(oldest);
       }
-      return { spansByTrace, lastActivity, nodes };
+      return { spansByTrace, lastActivity, nodes, raft };
     }),
 
   queryStarted: () => set({ queryState: "inflight", queryError: null }),

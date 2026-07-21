@@ -28,6 +28,8 @@
 
 #include <grpcpp/grpcpp.h>
 
+#include "common/collector_sink.h"
+#include "common/event_emitter.h"
 #include "lucent/v1/raft.grpc.pb.h"
 #include "raft/raft_node.h"
 #include "raft/raft_storage.h"
@@ -38,8 +40,10 @@ class MemberServer {
  public:
   // `members` maps every member id (incl. self) to its "host:port". `dir` is
   // the persistence directory (data/member-j/). `seed` seeds the election timer.
+  // `collector_addr` (optional): emit RaftEvents (role/term/leader) here for the
+  // election viz; empty ⇒ no eventing (tests).
   MemberServer(std::string id, std::map<std::string, std::string> members,
-               std::string dir, uint64_t seed);
+               std::string dir, uint64_t seed, std::string collector_addr = "");
   ~MemberServer();
 
   // Build + start the gRPC server (both services) on `bind_addr`, load persisted
@@ -70,6 +74,10 @@ class MemberServer {
   uint64_t NowMs() const;
   void DriverLoop();
   void Persist();                         // caller holds mu_
+  // Emit a RaftEvent (role/term/leader) on any change, and at ≥1 Hz otherwise —
+  // the heartbeat lets a UI that connects after the election still see current
+  // state (there is no snapshot for member roles). Caller holds mu_.
+  void EmitState();
   void Dispatch(std::vector<Message> out);  // caller must NOT hold mu_
   void Deliver(Message m);                // feed a peer's reply back into the core
 
@@ -80,6 +88,14 @@ class MemberServer {
   std::condition_variable cv_;  // commit advanced / applied changed / shutdown
   RaftNode node_;
   RaftStorage storage_;
+
+  // Optional RaftEvent eventing for the viz (null in tests).
+  std::unique_ptr<CollectorSink> sink_;
+  std::unique_ptr<EventEmitter> emitter_;
+  Role last_role_ = Role::kFollower;
+  uint64_t last_term_ = 0;
+  std::string last_leader_;
+  uint64_t last_emit_ms_ = 0;
 
   std::unordered_map<std::string, std::unique_ptr<lucent::v1::RaftService::Stub>> peers_;
   std::unique_ptr<grpc::Server> server_;

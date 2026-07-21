@@ -31,6 +31,7 @@ class Ports:
     gateway_http: int
     supervisor_ctl: int
     shard_base: int
+    member_base: int = 7200  # raft member j -> member_base + j (M5)
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ def load(path: str | pathlib.Path) -> Config:
             gateway_http=int(_require(ports, "gateway_http", "ports")),
             supervisor_ctl=int(_require(ports, "supervisor_ctl", "ports")),
             shard_base=int(_require(ports, "shard_base", "ports")),
+            member_base=int(ports.get("member_base", 7200)),
         ),
         paths=Paths(
             data=pathlib.Path(str(_require(paths, "data", "paths"))),

@@ -90,12 +90,41 @@ std::vector<std::string> Ids(const std::map<std::string, std::string>& m) {
 
 MemberServer::MemberServer(std::string id,
                            std::map<std::string, std::string> members,
-                           std::string dir, uint64_t seed)
+                           std::string dir, uint64_t seed,
+                           std::string collector_addr)
     : id_(std::move(id)),
       members_(std::move(members)),
       node_(id_, Ids(members_), seed),
       storage_(std::move(dir)),
-      epoch_(std::chrono::steady_clock::now()) {}
+      epoch_(std::chrono::steady_clock::now()) {
+  if (!collector_addr.empty()) {
+    sink_ = std::make_unique<CollectorSink>(collector_addr, id_);
+    emitter_ = std::make_unique<EventEmitter>(id_, sink_->Fn());
+  }
+}
+
+// Emit a RaftEvent on any (role, term, leader) change, and at ≥1 Hz otherwise
+// so a late-connecting UI still learns current state. Cheap (SPSC ring); caller
+// holds mu_.
+void MemberServer::EmitState() {
+  if (emitter_ == nullptr) return;
+  const Role r = node_.role();
+  const uint64_t t = node_.term();
+  const std::string& l = node_.leader();
+  const uint64_t now = NowMs();
+  const bool changed = r != last_role_ || t != last_term_ || l != last_leader_;
+  if (!changed && now - last_emit_ms_ < 1000) return;
+  last_role_ = r;
+  last_term_ = t;
+  last_leader_ = l;
+  last_emit_ms_ = now;
+  pb::Event ev;
+  auto* re = ev.mutable_raft();
+  re->set_term(t);
+  re->set_role(RoleName(r));
+  re->set_leader(l);
+  emitter_->Emit(std::move(ev));
+}
 
 MemberServer::~MemberServer() { Shutdown(); }
 
@@ -138,6 +167,7 @@ void MemberServer::Shutdown() {
   cv_.notify_all();  // wake Propose/Watch waiters
   if (driver_.joinable()) driver_.join();
   if (server_) server_->Shutdown();
+  if (emitter_) emitter_->Stop();
 }
 
 void MemberServer::DriverLoop() {
@@ -147,6 +177,7 @@ void MemberServer::DriverLoop() {
       std::lock_guard<std::mutex> lk(mu_);
       node_.Tick(NowMs());
       Persist();
+      EmitState();
       out = node_.TakeOutbox();
     }
     cv_.notify_all();
@@ -214,6 +245,7 @@ void MemberServer::Deliver(Message m) {
     if (stop_.load()) return;
     node_.Handle(m, NowMs());
     Persist();
+    EmitState();
     out = node_.TakeOutbox();
   }
   cv_.notify_all();
@@ -228,6 +260,7 @@ void MemberServer::OnRequestVote(const pb::VoteRequest& req, pb::VoteResponse* r
     m.vote_req = FromProto(req);
     node_.Handle(m, NowMs());
     Persist();
+    EmitState();
     out = node_.TakeOutbox();
   }
   cv_.notify_all();
@@ -247,6 +280,7 @@ void MemberServer::OnAppendEntries(const pb::AppendRequest& req, pb::AppendRespo
     m.append_req = FromProto(req);
     node_.Handle(m, NowMs());
     Persist();
+    EmitState();
     out = node_.TakeOutbox();
   }
   cv_.notify_all();

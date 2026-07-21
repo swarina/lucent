@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useLucent, NodeLive } from "../state/store";
 import { presetsFor, runChaos } from "./chaos";
+import { RaftPanel } from "./RaftPanel";
 import { RecallScatter } from "./RecallScatter";
 
 const SHARD_COLORS = [
@@ -221,6 +222,7 @@ export function ClusterPanel() {
   const close = useLucent((s) => s.setClusterOpen);
   const nodes = useLucent((s) => s.nodes);
   const cluster = useLucent((s) => s.cluster);
+  const raft = useLucent((s) => s.raft);
 
   if (!open) return null;
 
@@ -239,6 +241,7 @@ export function ClusterPanel() {
     if (s.primaryNode) chaosNodes.add(s.primaryNode);
     if (s.backupNode) chaosNodes.add(s.backupNode);
   }
+  for (const id of raft.keys()) chaosNodes.add(id);  // members are killable too
   const chaosNodeIds = [...chaosNodes].sort((a, b) => a.localeCompare(b));
   const totalRss = entries.reduce((t, [, l]) => t + Number(l.stats?.rssBytes ?? 0), 0);
   const totalEdges = entries.reduce((t, [, l]) => t + Number(l.stats?.edgeCount ?? 0), 0);
@@ -256,6 +259,7 @@ export function ClusterPanel() {
         <button className="close" onClick={() => close(false)}>✕</button>
       </div>
       <LoadGenControl />
+      <RaftPanel />
       <ChaosControl nodeIds={chaosNodeIds} />
       <RecallScatter />
       <div className="cluster-grid">
