@@ -28,6 +28,7 @@ struct Config {
     int gateway_http = 8080;
     int supervisor_ctl = 7999;
     int shard_base = 7100;  // shard i, replica r -> shard_base + i*10 + (r=='a'?0:1)
+    int member_base = 7200;  // raft member j -> member_base + j (M5)
   } ports;
 
   struct TimeoutsMs {

@@ -9,6 +9,7 @@ add_executable(lucent_common_tests
   event_emitter_test.cc
   hnsw_io_test.cc
   hnsw_test.cc
+  member_test.cc
   node_id_test.cc
   raft_test.cc
   raft_storage_test.cc

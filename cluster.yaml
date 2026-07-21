@@ -18,6 +18,7 @@ ports:
   gateway_http: 8080
   supervisor_ctl: 7999        # localhost only
   shard_base: 7100            # shard i, replica r -> 7100 + i*10 + r  (a=primary=+0, b=backup=+1)
+  member_base: 7200           # raft member j -> 7200 + j  (M5)
 
 timeouts_ms:
   query_total: 250

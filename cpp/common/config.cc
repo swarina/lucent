@@ -68,6 +68,7 @@ Config Config::Load(const std::string& path) {
   c.ports.gateway_http = Get<int>(ports, "gateway_http", "ports");
   c.ports.supervisor_ctl = Get<int>(ports, "supervisor_ctl", "ports");
   c.ports.shard_base = Get<int>(ports, "shard_base", "ports");
+  if (ports["member_base"]) c.ports.member_base = Get<int>(ports, "member_base", "ports");
 
   YAML::Node timeouts = Require(root, "timeouts_ms", "");
   c.timeouts_ms.query_total = Get<int>(timeouts, "query_total", "timeouts_ms");
