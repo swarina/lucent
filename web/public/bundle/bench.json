@@ -1,0 +1,50 @@
+{
+ "schema": 1,
+ "recorded_at": "2026-07-19T12:00:45Z",
+ "corpus_hash": "f2dd554785a32faa",
+ "model": "fake-hash",
+ "oracle": "bruteforce-f32",
+ "query_set": "queries.json[:300]",
+ "configs": [
+  {
+   "partitioning": "semantic",
+   "shards": 2,
+   "probe": 0,
+   "ef": 64,
+   "recall_at_10": 0.9763333333333334,
+   "p50_ms": 0.6244789983611554,
+   "p99_ms": 2.218378843681421,
+   "mean_visited": 1818.9133333333334
+  },
+  {
+   "partitioning": "semantic",
+   "shards": 2,
+   "probe": 1,
+   "ef": 64,
+   "recall_at_10": 0.469,
+   "p50_ms": 0.5378749992814846,
+   "p99_ms": 0.9257533296477024,
+   "mean_visited": 902.63
+  },
+  {
+   "partitioning": "hash",
+   "shards": 2,
+   "probe": 0,
+   "ef": 64,
+   "recall_at_10": 0.9776666666666667,
+   "p50_ms": 0.627354507741984,
+   "p99_ms": 2.329901750781571,
+   "mean_visited": 1819.7966666666666
+  },
+  {
+   "partitioning": "hash",
+   "shards": 2,
+   "probe": 1,
+   "ef": 64,
+   "recall_at_10": 0.47533333333333333,
+   "p50_ms": 0.5997289990773425,
+   "p99_ms": 1.0348577401600778,
+   "mean_visited": 903.4733333333334
+  }
+ ]
+}

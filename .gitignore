@@ -52,6 +52,9 @@ data/
 bundle/
 bench/results/
 *.bundle
+# ...except the one curated bundle that ships with the static demo (M6-T3).
+!web/public/bundle/
+!web/public/bundle/**
 
 # --- Caches / models (never commit; regenerated locally) ---
 .cache/

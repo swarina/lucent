@@ -1,0 +1,59 @@
+{
+ "schema": 1,
+ "recorded_at": "2026-07-21T15:54:53Z",
+ "duration_ms": 7033,
+ "cluster": {
+  "shardMap": {
+   "epoch": "3",
+   "shards": [
+    {
+     "primaryNode": "shard-0a",
+     "backupNode": "shard-0b",
+     "primaryAddr": "127.0.0.1:7100",
+     "backupAddr": "127.0.0.1:7101",
+     "primaryState": "NODE_STATE_SERVING",
+     "backupState": "NODE_STATE_SERVING"
+    },
+    {
+     "shardId": 1,
+     "primaryNode": "shard-1a",
+     "backupNode": "shard-1b",
+     "primaryAddr": "127.0.0.1:7110",
+     "backupAddr": "127.0.0.1:7111",
+     "primaryState": "NODE_STATE_SERVING",
+     "backupState": "NODE_STATE_SERVING"
+    }
+   ],
+   "partitioning": "hash"
+  },
+  "nodes": [
+   {
+    "nodeId": "shard-0a",
+    "health": "HEALTH_HEALTHY"
+   },
+   {
+    "nodeId": "shard-0b",
+    "health": "HEALTH_HEALTHY"
+   },
+   {
+    "nodeId": "shard-1a",
+    "health": "HEALTH_HEALTHY"
+   },
+   {
+    "nodeId": "shard-1b",
+    "health": "HEALTH_HEALTHY"
+   }
+  ]
+ },
+ "corpus_hash": "f2dd554785a32faa",
+ "chapters": [
+  {
+   "t_ms": 7,
+   "label": "queries"
+  },
+  {
+   "t_ms": 3093,
+   "label": "failover"
+  }
+ ]
+}

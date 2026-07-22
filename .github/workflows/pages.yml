@@ -1,0 +1,54 @@
+# Deploy the static "watch it think" demo to GitHub Pages (M6-T3).
+# The whole site is client-side: the Vite build plus the curated replay bundle
+# committed at web/public/bundle/ (Vite copies public/ into dist/). No backend —
+# ReplaySource plays the recording; a probe of /api/ready 404s and falls back to
+# replay. Requires Pages → Source = "GitHub Actions" in repo settings (one-time).
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push supersedes an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      # web/src/types.ts is hand-written JSON shapes, so the web build needs no
+      # generated proto bindings (those are the gateway's) — just build.
+      - name: Build web
+        working-directory: web
+        run: npm install && npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

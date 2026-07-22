@@ -16,6 +16,7 @@ const PLAY_SECONDS = 5; // full traversal plays over ~5s at speed ×1
 export function InspectorOverlay() {
   const traceId = useLucent((s) => s.inspectorTrace);
   const close = useLucent((s) => s.closeInspector);
+  const replay = useLucent((s) => !!s.source?.replay);
   const [shards, setShards] = useState<ShardInspectorData[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [idx, setIdx] = useState(0);
@@ -26,13 +27,23 @@ export function InspectorOverlay() {
     setShards(null);
     setError(null);
     setIdx(0);
+    // The 3D inspector decodes per-shard trace blobs served by the live gateway;
+    // the recorded demo doesn't carry them yet (M6-T3 remaining), so say so
+    // plainly rather than surfacing a raw HTTP 404.
+    if (replay) {
+      setError(
+        "The 3D shard inspector runs against the live cluster — run `lucent dev` " +
+          "to watch a single shard's HNSW traversal. It isn't part of this recorded demo yet.",
+      );
+      return;
+    }
     loadTraceInspector(traceId)
       .then((s) => live && (s.length ? setShards(s) : setError("no FULL trace blobs for this query")))
       .catch((e) => live && setError(String(e)));
     return () => {
       live = false;
     };
-  }, [traceId]);
+  }, [traceId, replay]);
 
   if (!traceId) return null;
   const data = shards?.[idx] ?? null;
