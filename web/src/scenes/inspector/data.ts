@@ -122,8 +122,8 @@ export function visibleCount(hopTimeUs: Float32Array, cursorUs: number): number 
   return lo;
 }
 
-async function fetchProjection(shardId: number): Promise<Float32Array> {
-  const resp = await fetch(`/api/projection/${shardId}`);
+async function fetchProjection(url: string, shardId: number): Promise<Float32Array> {
+  const resp = await fetch(url);
   if (!resp.ok) throw new Error(`projection ${shardId}: HTTP ${resp.status}`);
   return new Float32Array(await resp.arrayBuffer());
 }
@@ -148,18 +148,30 @@ function bakeHops(blob: BlobJson): { hops: Hop[]; maxLayer: number; durationUs: 
   return { hops, maxLayer, durationUs };
 }
 
-/** Loads every shard's inspector data for a trace. */
+/**
+ * Loads every shard's inspector data for a trace. Live mode hits the gateway;
+ * replay mode (`base` set, e.g. "bundle") reads the same shapes from the static
+ * recorded bundle — `traces_json/{hex}.json` and `projections/shard-{id}.f32` —
+ * so the 3D inspector works with no backend (M6-T3).
+ */
 export async function loadTraceInspector(
   traceIdHex: string,
+  base?: string,
 ): Promise<ShardInspectorData[]> {
-  const resp = await fetch(`/api/trace/${traceIdHex}/blobs`);
+  const blobsUrl = base
+    ? `${base}/traces_json/${traceIdHex}.json`
+    : `/api/trace/${traceIdHex}/blobs`;
+  const projUrl = (shardId: number) =>
+    base ? `${base}/projections/shard-${shardId}.f32` : `/api/projection/${shardId}`;
+
+  const resp = await fetch(blobsUrl);
   if (!resp.ok) throw new Error(`trace blobs: HTTP ${resp.status}`);
   const body = (await resp.json()) as { blobs: Record<string, BlobJson> };
 
   const entries = Object.entries(body.blobs);
   const out = await Promise.all(
     entries.map(async ([nodeId, blob]) => {
-      const projection = await fetchProjection(blob.shardId).catch(
+      const projection = await fetchProjection(projUrl(blob.shardId), blob.shardId).catch(
         () => new Float32Array(0),
       );
       const { hops, maxLayer, durationUs } = bakeHops(blob);

@@ -8,7 +8,9 @@ everything a static demo needs to replay it with no backend (data-formats.md §6
       manifest.json                       schema, duration, ClusterState@start, chapters
       events.ndjson                       every Event (proto3-JSON), one per line
       results/{trace_hex}.json            QueryResponse per query (results panel)
-      traces/{trace_hex}.{node}.pb        FULL TraceBlobs (3D inspector)
+      traces/{trace_hex}.{node}.pb        FULL TraceBlobs, raw proto (archival)
+      traces_json/{trace_hex}.json        decoded /api/trace blobs (static 3D inspector)
+      projections/shard-{id}.f32          per-shard 2D point cloud (static 3D inspector)
       bench.json                          latest recall/latency sweep
 
 REST calls run in a thread so the WS collector keeps draining while they block.
@@ -77,6 +79,35 @@ def _save_traces(gateway: str, out: pathlib.Path, trace_hex: str) -> int:
     return n
 
 
+def _save_trace_json(gateway: str, out: pathlib.Path, trace_hex: str) -> set[int]:
+    """Save the gateway-decoded blobs JSON the 3D inspector consumes directly,
+    so the static demo needs no server-side proto decode. Returns the shard ids
+    that hold blobs for this trace (so their projections get fetched)."""
+    try:
+        body = _get(f"{gateway}/api/trace/{trace_hex}/blobs")
+    except (urllib.error.URLError, json.JSONDecodeError):
+        return set()
+    blobs = body.get("blobs") or {}
+    if not blobs:
+        return set()
+    (out / "traces_json").mkdir(parents=True, exist_ok=True)
+    (out / "traces_json" / f"{trace_hex}.json").write_text(json.dumps(body))
+    return {int(b.get("shardId", 0)) for b in blobs.values()}
+
+
+def _save_projections(gateway: str, out: pathlib.Path, shard_ids: set[int]) -> int:
+    """Per-shard 2D projection point clouds (raw f32), same bytes the gateway
+    serves at /api/projection/{id} — the inspector's static point cloud."""
+    (out / "projections").mkdir(parents=True, exist_ok=True)
+    n = 0
+    for sid in sorted(shard_ids):
+        buf = _get_bytes(f"{gateway}/api/projection/{sid}")
+        if buf:
+            (out / "projections" / f"shard-{sid}.f32").write_bytes(buf)
+            n += 1
+    return n
+
+
 async def _record(gateway: str, ws_url: str, out: pathlib.Path,
                   corpus_hash: str) -> dict:
     import websockets
@@ -109,6 +140,7 @@ async def _record(gateway: str, ws_url: str, out: pathlib.Path,
 
         # --- Chapter 1: queries (FULL traces → 3D inspector replay) ---
         chapters.append({"t_ms": ms(), "label": "queries"})
+        shard_ids: set[int] = set()
         for q in QUERIES:
             resp = await asyncio.to_thread(
                 _post, f"{gateway}/api/query", {"text": q, "k": 10, "trace": "full"})
@@ -117,7 +149,12 @@ async def _record(gateway: str, ws_url: str, out: pathlib.Path,
                 _save_result(out, tid, resp)
                 await asyncio.sleep(0.35)  # let spans + blobs settle
                 await asyncio.to_thread(_save_traces, gateway, out, tid)
+                shard_ids |= await asyncio.to_thread(_save_trace_json, gateway, out, tid)
             await asyncio.sleep(0.4)
+
+        # Per-shard projections are static; fetch each once for the shards that
+        # actually held FULL blobs above.
+        await asyncio.to_thread(_save_projections, gateway, out, shard_ids)
 
         # --- Chapter 2: failover (kill a shard → degraded coverage → recover) ---
         shards = cluster0.get("shardMap", {}).get("shards", [])
@@ -188,7 +225,13 @@ def run(config_path: str, out: str) -> None:
     if bench.exists():
         (out_dir / "bench.json").write_text(bench.read_text())
 
-    traces = len(list((out_dir / "traces").glob("*.pb"))) if (out_dir / "traces").exists() else 0
-    results = len(list((out_dir / "results").glob("*.json"))) if (out_dir / "results").exists() else 0
-    log.info("bundle done: %d events, %d results, %d trace blobs, chapters=%s",
-             len(events), results, traces, [c["label"] for c in manifest["chapters"]])
+    def _count(sub: str, pat: str) -> int:
+        d = out_dir / sub
+        return len(list(d.glob(pat))) if d.exists() else 0
+
+    log.info(
+        "bundle done: %d events, %d results, %d trace blobs, %d decoded traces, "
+        "%d projections, chapters=%s",
+        len(events), _count("results", "*.json"), _count("traces", "*.pb"),
+        _count("traces_json", "*.json"), _count("projections", "*.f32"),
+        [c["label"] for c in manifest["chapters"]])

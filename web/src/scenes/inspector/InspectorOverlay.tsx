@@ -13,6 +13,14 @@ import { InspectorScene } from "./InspectorScene";
 
 const PLAY_SECONDS = 5; // full traversal plays over ~5s at speed ×1
 
+// Shown when a query has no FULL trace blobs to inspect (only UI-initiated FULL
+// queries capture them; in the recorded demo, the failover-chapter queries ran
+// at "spans" tier, so pick a queries-chapter result instead).
+const noTraceMsg = (replay: boolean): string =>
+  replay
+    ? "This recorded query didn't capture a FULL trace — pick a result from the “queries” chapter."
+    : "no FULL trace blobs for this query";
+
 export function InspectorOverlay() {
   const traceId = useLucent((s) => s.inspectorTrace);
   const close = useLucent((s) => s.closeInspector);
@@ -27,19 +35,11 @@ export function InspectorOverlay() {
     setShards(null);
     setError(null);
     setIdx(0);
-    // The 3D inspector decodes per-shard trace blobs served by the live gateway;
-    // the recorded demo doesn't carry them yet (M6-T3 remaining), so say so
-    // plainly rather than surfacing a raw HTTP 404.
-    if (replay) {
-      setError(
-        "The 3D shard inspector runs against the live cluster — run `lucent dev` " +
-          "to watch a single shard's HNSW traversal. It isn't part of this recorded demo yet.",
-      );
-      return;
-    }
-    loadTraceInspector(traceId)
-      .then((s) => live && (s.length ? setShards(s) : setError("no FULL trace blobs for this query")))
-      .catch((e) => live && setError(String(e)));
+    // Replay reads the recorded bundle (traces_json/ + projections/); live hits
+    // the gateway. Both yield the same shapes.
+    loadTraceInspector(traceId, replay ? "bundle" : undefined)
+      .then((s) => live && (s.length ? setShards(s) : setError(noTraceMsg(replay))))
+      .catch((e) => live && setError(replay ? noTraceMsg(replay) : String(e)));
     return () => {
       live = false;
     };
