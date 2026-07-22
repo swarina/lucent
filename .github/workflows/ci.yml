@@ -191,24 +191,6 @@ jobs:
         run: uv --project py run python py/tools/integration_smoke.py
       - name: Bench recall gates (fake vectors, deterministic)
         run: uv --project py run lucent bench --config .lucent/cluster-dev.yaml --queries 100 --ef 16,100 --gate --probe 0,1
-      - name: Semantic partitioning end-to-end (M4)
-        run: |
-          # Re-ingest under semantic k-means and bench it, merging into the same
-          # bench.json (both series → the ops-panel chart). Exercises the whole
-          # path: centroids written, coordinator loads + routes by centroid. The
-          # semantic recall gate is real-encoder-only (fake vectors carry no
-          # topic), so here we assert the mechanics + full-probe recall, not the
-          # divergence — that's verified locally with `--extra embed`.
-          pkill -f "lucent dev" || true; sleep 2
-          pkill -f "lucent-shard|lucent-coord|embedsvc|dist/index.js" || true; sleep 1
-          rm -rf data .lucent
-          uv --project py run lucent dev --shards 2 --partitioning semantic --fake-embed > /tmp/dev-sem.log 2>&1 &
-          for i in $(seq 1 60); do grep -q "cluster ready" /tmp/dev-sem.log && break; sleep 2; done
-          grep "cluster ready" /tmp/dev-sem.log
-          uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
-          test -f data/centroids.f32 && test -f data/partition.json  # artifacts written
-          uv --project py run lucent bench --config .lucent/cluster-dev.yaml --queries 100 --ef 16,100 --probe 0,1 --gate --merge
-          python -c "import json; c=json.load(open('bench/results/bench.json'))['configs']; assert any(x['partitioning']=='semantic' for x in c), 'no semantic series'; print('bench.json:', len(c), 'configs across', {x['partitioning'] for x in c})"
       - name: Determinism gate — round A digest
         run: uv --project py run python py/tools/make_golden.py --digest /tmp/digestA.json
       - name: Determinism gate — fresh cluster, round B, compare
@@ -221,6 +203,26 @@ jobs:
           uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
           uv --project py run python py/tools/make_golden.py --digest /tmp/digestB.json
           uv --project py run python py/tools/make_golden.py --compare /tmp/digestA.json /tmp/digestB.json
+      - name: Semantic partitioning end-to-end (M4)
+        run: |
+          # Runs AFTER the determinism gate: it re-ingests under a DIFFERENT
+          # partitioning (semantic), which places docs on different shards and so
+          # must not leak into the two hash-partitioned determinism rounds above.
+          # Re-ingest under semantic k-means and bench it, merging both series
+          # into bench.json (the ops-panel chart). Exercises the whole path:
+          # centroids written, coordinator loads + routes by centroid. The
+          # semantic recall gate is real-encoder-only (fake vectors carry no
+          # topic), so here we assert the mechanics + full-probe recall.
+          pkill -f "lucent dev" || true; sleep 2
+          pkill -f "lucent-shard|lucent-coord|embedsvc|dist/index.js" || true; sleep 1
+          rm -rf data .lucent
+          uv --project py run lucent dev --shards 2 --partitioning semantic --fake-embed > /tmp/dev-sem.log 2>&1 &
+          for i in $(seq 1 60); do grep -q "cluster ready" /tmp/dev-sem.log && break; sleep 2; done
+          grep "cluster ready" /tmp/dev-sem.log
+          uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
+          test -f data/centroids.f32 && test -f data/partition.json  # artifacts written
+          uv --project py run lucent bench --config .lucent/cluster-dev.yaml --queries 100 --ef 16,100 --probe 0,1 --gate --merge
+          python -c "import json; c=json.load(open('bench/results/bench.json'))['configs']; assert any(x['partitioning']=='semantic' for x in c), 'no semantic series'; print('bench.json:', len(c), 'configs across', {x['partitioning'] for x in c})"
       - name: Failover suite under load (replicas=2)
         run: |
           pkill -f "lucent dev" || true; sleep 2
