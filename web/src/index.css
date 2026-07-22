@@ -81,6 +81,46 @@ body {
   color: var(--text);
 }
 
+/* Replay-mode indicator strip (shown only when booted off a recorded bundle). */
+.replay-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  font-size: 0.76rem;
+  color: var(--trace-a);
+  background: color-mix(in srgb, var(--trace-a) 9%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--trace-a) 30%, var(--line));
+}
+.replay-chip .rc-tag {
+  flex: none;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--trace-a) 45%, transparent);
+  border-radius: 4px;
+}
+.replay-chip .rc-chapter {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.replay-chip .rc-bar {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--trace-a) 18%, transparent);
+  overflow: hidden;
+}
+.replay-chip .rc-fill {
+  display: block;
+  height: 100%;
+  background: var(--trace-a);
+  transition: width 80ms linear;
+}
+
 /* ---- query bar ---- */
 .querybar {
   display: flex;

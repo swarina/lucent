@@ -71,6 +71,31 @@ describe("query lifecycle", () => {
   });
 });
 
+describe("replay loop reset", () => {
+  it("clears per-trace state so a re-replayed trace does not double its spans", () => {
+    const traceSpans: EventJson[] = [
+      spanEvent("coord-0", "loop", "SPAN_QUERY_RECEIVED", 0, 0),
+      spanEvent("coord-0", "loop", "SPAN_EMBED", 0, 100),
+      spanEvent("shard-0a", "loop", "SPAN_SHARD_SEARCH", 100, 200, 0),
+    ];
+    // First pass through the recording.
+    useLucent.getState().ingestEvents(traceSpans);
+    useLucent.getState().queryFinished({ traceId: "loop", hits: [], coverage: { probed: 2, answered: 2 } });
+    expect(useLucent.getState().spansByTrace.get("loop")).toHaveLength(3);
+
+    // Loop boundary: without the reset, the next pass would append the same
+    // spans onto the same trace id (the replay bug — a doubled waterfall).
+    useLucent.getState().resetReplay();
+    expect(useLucent.getState().spansByTrace.size).toBe(0);
+    expect(useLucent.getState().activeTrace).toBeNull();
+    expect(useLucent.getState().results).toHaveLength(0);
+
+    // Second pass lands a single clean set again.
+    useLucent.getState().ingestEvents(traceSpans);
+    expect(useLucent.getState().spansByTrace.get("loop")).toHaveLength(3);
+  });
+});
+
 describe("waterfallLayout", () => {
   it("normalizes to [0,1] across the trace window", () => {
     const spans: SpanJson[] = [

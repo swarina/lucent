@@ -18,6 +18,39 @@ export interface QueryParams {
 
 export type EventHandler = (topic: string, events: EventJson[]) => void;
 
+export interface ReadyInfo {
+  ready: boolean;
+  embedModel: string | null;
+  fakeEmbed: boolean;
+}
+
+// Replay-mode metadata (frontend.md §4). Present only on ReplaySource.
+export interface ReplayInfo {
+  chapters: { tMs: number; label: string }[];
+  durationMs: number;
+  progress: number;  // 0..1, advanced by the replay clock
+}
+
+// The single surface the app talks to — implemented by both LiveSource and the
+// static-demo ReplaySource, so the UI is identical in either mode.
+export interface Source {
+  onStatusChange: ((connected: boolean) => void) | null;
+  start(): void;
+  onEvents(handler: EventHandler): () => void;
+  query(params: QueryParams): Promise<QueryResponseJson>;
+  cluster(): Promise<ClusterStateJson>;
+  ready(): Promise<ReadyInfo>;
+  chaos(cmd: ChaosCmd): Promise<{ active?: string }>;
+  readonly replay?: ReplayInfo | null;  // set ⇒ replay mode
+  // Replay-only: fired as each recorded query's trace completes, so the results
+  // panel + waterfall light up exactly as they did live. Unused by LiveSource
+  // (there, the query() promise delivers the result).
+  onQueryReplay?: ((resp: QueryResponseJson) => void) | null;
+  // Replay-only: fired when the clock wraps to the start, so accumulated
+  // per-trace state can be cleared before the same trace ids replay again.
+  onReplayLoop?: (() => void) | null;
+}
+
 // Chaos surface (frontend.md §5.3). Process-level chaos (kill/restart) hits the
 // supervisor; in-process faults (pause/slow/drop/clear) hit the shard. `ms`/`p`
 // are only meaningful for the fault kinds.
@@ -27,7 +60,7 @@ export type ChaosCmd =
   | { kind: "drop"; nodeId: string; p: number }
   | { kind: "clear"; nodeId: string };
 
-export class LiveSource {
+export class LiveSource implements Source {
   private ws: WebSocket | null = null;
   private handlers = new Set<EventHandler>();
   private reconnectMs = 500;

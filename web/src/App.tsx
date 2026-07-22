@@ -2,43 +2,64 @@
 // center, Results right, Waterfall drawer below. The inspector (3D), ops and
 // ingest views land with M1/M3.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 
 import { ChaosMenu } from "./components/ChaosMenu";
 import { ClusterPanel } from "./components/ClusterPanel";
 import { QueryBar } from "./components/QueryBar";
+import { ReplayChip } from "./components/ReplayChip";
 import { ResultsPanel } from "./components/ResultsPanel";
 import { Stage } from "./components/Stage";
 import { Waterfall } from "./components/Waterfall";
 import { InspectorOverlay } from "./scenes/inspector/InspectorOverlay";
-import { LiveSource } from "./sources/live";
+import { pickSource } from "./sources/pick";
+import type { Source } from "./sources/live";
 import { useLucent } from "./state/store";
 
 export function App() {
-  const source = useMemo(() => new LiveSource(), []);
+  // Source is chosen asynchronously at boot: live gateway if one answers,
+  // else a recorded bundle (ReplaySource). Null until that resolves (a few
+  // hundred ms) — the theater renders its "connecting" state meanwhile.
+  const [source, setSource] = useState<Source | null>(null);
 
   useEffect(() => {
-    useLucent.getState().setSource(source);
-    source.onStatusChange = (c) => {
-      useLucent.getState().setConnected(c);
-      if (c) {
-        void source.cluster().then((cl) => useLucent.getState().setCluster(cl));
-        void source
-          .ready()
-          .then((r) => useLucent.getState().setEmbedInfo(r.embedModel, r.fakeEmbed))
-          .catch(() => {});
+    let unsub = () => {};
+    let cancelled = false;
+    void pickSource().then((src) => {
+      if (cancelled) return;
+      setSource(src);
+      useLucent.getState().setSource(src);
+      src.onStatusChange = (c) => {
+        useLucent.getState().setConnected(c);
+        if (c) {
+          void src.cluster().then((cl) => useLucent.getState().setCluster(cl));
+          void src
+            .ready()
+            .then((r) => useLucent.getState().setEmbedInfo(r.embedModel, r.fakeEmbed))
+            .catch(() => {});
+        }
+      };
+      unsub = src.onEvents((_topic, events) =>
+        useLucent.getState().ingestEvents(events),
+      );
+      // Replay mode has no live query() to resolve — recorded completions arrive
+      // through this callback as the clock reaches each trace's end.
+      if (src.replay) {
+        src.onQueryReplay = (resp) => useLucent.getState().queryFinished(resp);
+        src.onReplayLoop = () => useLucent.getState().resetReplay();
       }
+      src.start();
+    });
+    return () => {
+      cancelled = true;
+      unsub();
     };
-    const unsub = source.onEvents((_topic, events) =>
-      useLucent.getState().ingestEvents(events),
-    );
-    source.start();
-    return unsub;
-  }, [source]);
+  }, []);
 
   return (
     <div className="theater">
       <FakeEmbedBanner />
+      {source?.replay && <ReplayChip source={source} />}
       <QueryBar source={source} />
       <div className="mainrow">
         <Stage />

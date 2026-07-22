@@ -7,6 +7,13 @@
       "runtimeArgs": ["--project", "py", "run", "lucent", "dev", "--shards", "2", "--fake-embed"],
       "port": 8080,
       "autoPort": false
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "web",
+      "port": 5173
     }
   ]
 }

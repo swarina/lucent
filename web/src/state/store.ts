@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 
-import type { LiveSource } from "../sources/live";
+import type { Source } from "../sources/live";
 import {
   ClusterStateJson,
   EventJson,
@@ -81,14 +81,14 @@ interface LucentState {
   embedModel: string | null;
   fakeEmbed: boolean;
 
-  /** the live source (held here so any component can drive chaos/queries) */
-  source: LiveSource | null;
+  /** the active source (held here so any component can drive chaos/queries) */
+  source: Source | null;
   /** open right-click chaos menu, or null */
   chaosMenu: ChaosMenuState | null;
   /** last chaos action result, shown briefly then cleared */
   chaosToast: ChaosToast | null;
 
-  setSource(s: LiveSource): void;
+  setSource(s: Source): void;
   setEmbedInfo(model: string | null, fake: boolean): void;
   setChaosMenu(m: ChaosMenuState | null): void;
   setChaosToast(t: ChaosToast | null): void;
@@ -101,6 +101,8 @@ interface LucentState {
   queryStarted(): void;
   queryFinished(resp: QueryResponseJson): void;
   queryFailed(message: string): void;
+  /** Replay loop boundary: drop accumulated per-trace state before it replays. */
+  resetReplay(): void;
   setHover(h: HoverRef | null): void;
 }
 
@@ -205,6 +207,15 @@ export const useLucent = create<LucentState>((set) => ({
     }),
   queryFailed: (message) =>
     set({ queryState: "error", queryError: message, results: [] }),
+
+  resetReplay: () =>
+    set({
+      spansByTrace: new Map(),
+      activeTrace: null,
+      results: [],
+      lastResponse: null,
+      queryState: "idle",
+    }),
 
   setHover: (hover) => set({ hover }),
 }));

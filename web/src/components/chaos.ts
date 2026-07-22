@@ -2,7 +2,7 @@
 // reachable two ways — the ops/cluster panel's chaos block and a right-click on
 // a stage node — so both surfaces build their buttons from this one list.
 
-import type { ChaosCmd, LiveSource } from "../sources/live";
+import type { ChaosCmd, Source } from "../sources/live";
 
 export interface ChaosPreset {
   label: string;
@@ -33,7 +33,7 @@ export function presetsFor(nodeId: string): ChaosPreset[] {
 }
 
 // Run a preset and return a short human string for the toast (or throw).
-export async function runChaos(source: LiveSource, cmd: ChaosCmd): Promise<string> {
+export async function runChaos(source: Source, cmd: ChaosCmd): Promise<string> {
   const res = await source.chaos(cmd);
   const detail =
     cmd.kind === "pause" || cmd.kind === "slow"

@@ -1,9 +1,9 @@
 import { FormEvent, useState } from "react";
 
-import { LiveSource } from "../sources/live";
+import { Source } from "../sources/live";
 import { useLucent } from "../state/store";
 
-export function QueryBar({ source }: { source: LiveSource }) {
+export function QueryBar({ source }: { source: Source | null }) {
   const [text, setText] = useState("");
   const [k, setK] = useState(10);
   const [probe, setProbe] = useState(0); // 0 = all shards
@@ -20,7 +20,7 @@ export function QueryBar({ source }: { source: LiveSource }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!text.trim()) return;
+    if (!source || !text.trim()) return;
     useLucent.getState().queryStarted();
     try {
       const resp = await source.query({ text, k, probe });
