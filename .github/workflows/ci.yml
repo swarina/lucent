@@ -195,11 +195,14 @@ jobs:
         run: uv --project py run python py/tools/make_golden.py --digest /tmp/digestA.json
       - name: Determinism gate — fresh cluster, round B, compare
         run: |
-          pkill -f "lucent dev" || true; sleep 2
-          pkill -f "lucent-shard|lucent-coord|embedsvc|dist/index.js" || true; sleep 1
+          pkill -f "lucent dev" || true
+          pkill -f "lucent-shard|lucent-coord|lucent-member|embedsvc|dist/index.js" || true
+          for i in $(seq 1 30); do pgrep -f "lucent dev" >/dev/null 2>&1 || break; sleep 1; done
+          sleep 2
           rm -rf data .lucent
           uv --project py run lucent dev --shards 2 --fake-embed > /tmp/dev2.log 2>&1 &
-          for i in $(seq 1 60); do grep -q "cluster ready" /tmp/dev2.log && break; sleep 2; done
+          for i in $(seq 1 90); do curl -s --max-time 2 http://127.0.0.1:8080/api/ready 2>/dev/null | grep -q '"ready":true' && break; sleep 2; done
+          curl -s --max-time 2 http://127.0.0.1:8080/api/ready | grep -q '"ready":true' || { echo "=== round-B cluster failed to boot ==="; cat /tmp/dev2.log; exit 1; }
           uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
           uv --project py run python py/tools/make_golden.py --digest /tmp/digestB.json
           uv --project py run python py/tools/make_golden.py --compare /tmp/digestA.json /tmp/digestB.json
@@ -217,7 +220,11 @@ jobs:
           pkill -f "lucent-shard|lucent-coord|lucent-member|embedsvc|dist/index.js" || true
           # This is the job's 3rd cluster reboot — wait for the previous one to
           # release port 8080 before rebinding, else the boot never goes ready.
-          for i in $(seq 1 30); do curl -s --max-time 1 http://127.0.0.1:8080/api/ready >/dev/null 2>&1 || break; sleep 1; done
+          # Wait for the previous supervisor to fully exit — it holds the :7999
+          # control port through its graceful child-shutdown, and rebinding
+          # before it's gone fails with EADDRINUSE.
+          for i in $(seq 1 30); do pgrep -f "lucent dev" >/dev/null 2>&1 || break; sleep 1; done
+          sleep 2
           rm -rf data .lucent
           uv --project py run lucent dev --shards 2 --partitioning semantic --fake-embed > /tmp/dev-sem.log 2>&1 &
           for i in $(seq 1 90); do curl -s --max-time 2 http://127.0.0.1:8080/api/ready 2>/dev/null | grep -q '"ready":true' && break; sleep 2; done
@@ -230,7 +237,11 @@ jobs:
         run: |
           pkill -f "lucent dev" || true
           pkill -f "lucent-shard|lucent-coord|lucent-member|embedsvc|dist/index.js" || true
-          for i in $(seq 1 30); do curl -s --max-time 1 http://127.0.0.1:8080/api/ready >/dev/null 2>&1 || break; sleep 1; done
+          # Wait for the previous supervisor to fully exit — it holds the :7999
+          # control port through its graceful child-shutdown, and rebinding
+          # before it's gone fails with EADDRINUSE.
+          for i in $(seq 1 30); do pgrep -f "lucent dev" >/dev/null 2>&1 || break; sleep 1; done
+          sleep 2
           rm -rf data .lucent
           uv --project py run lucent dev --shards 2 --replicas 2 --fake-embed > /tmp/dev3.log 2>&1 &
           for i in $(seq 1 90); do curl -s --max-time 2 http://127.0.0.1:8080/api/ready 2>/dev/null | grep -q '"ready":true' && break; sleep 2; done
