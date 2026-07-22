@@ -213,24 +213,28 @@ jobs:
           # centroids written, coordinator loads + routes by centroid. The
           # semantic recall gate is real-encoder-only (fake vectors carry no
           # topic), so here we assert the mechanics + full-probe recall.
-          pkill -f "lucent dev" || true; sleep 2
-          pkill -f "lucent-shard|lucent-coord|embedsvc|dist/index.js" || true; sleep 1
+          pkill -f "lucent dev" || true
+          pkill -f "lucent-shard|lucent-coord|lucent-member|embedsvc|dist/index.js" || true
+          # This is the job's 3rd cluster reboot — wait for the previous one to
+          # release port 8080 before rebinding, else the boot never goes ready.
+          for i in $(seq 1 30); do curl -s --max-time 1 http://127.0.0.1:8080/api/ready >/dev/null 2>&1 || break; sleep 1; done
           rm -rf data .lucent
           uv --project py run lucent dev --shards 2 --partitioning semantic --fake-embed > /tmp/dev-sem.log 2>&1 &
-          for i in $(seq 1 60); do grep -q "cluster ready" /tmp/dev-sem.log && break; sleep 2; done
-          grep "cluster ready" /tmp/dev-sem.log
+          for i in $(seq 1 90); do curl -s --max-time 2 http://127.0.0.1:8080/api/ready 2>/dev/null | grep -q '"ready":true' && break; sleep 2; done
+          curl -s --max-time 2 http://127.0.0.1:8080/api/ready | grep -q '"ready":true' || { echo "=== semantic cluster failed to boot ==="; cat /tmp/dev-sem.log; exit 1; }
           uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
           test -f data/centroids.f32 && test -f data/partition.json  # artifacts written
           uv --project py run lucent bench --config .lucent/cluster-dev.yaml --queries 100 --ef 16,100 --probe 0,1 --gate --merge
           python -c "import json; c=json.load(open('bench/results/bench.json'))['configs']; assert any(x['partitioning']=='semantic' for x in c), 'no semantic series'; print('bench.json:', len(c), 'configs across', {x['partitioning'] for x in c})"
       - name: Failover suite under load (replicas=2)
         run: |
-          pkill -f "lucent dev" || true; sleep 2
-          pkill -f "lucent-shard|lucent-coord|embedsvc|dist/index.js" || true; sleep 1
+          pkill -f "lucent dev" || true
+          pkill -f "lucent-shard|lucent-coord|lucent-member|embedsvc|dist/index.js" || true
+          for i in $(seq 1 30); do curl -s --max-time 1 http://127.0.0.1:8080/api/ready >/dev/null 2>&1 || break; sleep 1; done
           rm -rf data .lucent
           uv --project py run lucent dev --shards 2 --replicas 2 --fake-embed > /tmp/dev3.log 2>&1 &
-          for i in $(seq 1 60); do grep -q "cluster ready" /tmp/dev3.log && break; sleep 2; done
-          grep "cluster ready" /tmp/dev3.log
+          for i in $(seq 1 90); do curl -s --max-time 2 http://127.0.0.1:8080/api/ready 2>/dev/null | grep -q '"ready":true' && break; sleep 2; done
+          curl -s --max-time 2 http://127.0.0.1:8080/api/ready | grep -q '"ready":true' || { echo "=== replicas=2 cluster failed to boot ==="; cat /tmp/dev3.log; exit 1; }
           # Ingest to primaries; replication mirrors to backups; seal seals both.
           uv --project py run lucent ingest --config .lucent/cluster-dev.yaml --corpus testdata/corpus-2k.jsonl --n 2000
           # 20 qps storm, SIGKILL a primary at t=5s + a slow-fault variant:
@@ -238,4 +242,4 @@ jobs:
           uv --project py run python py/tools/failover_suite.py --scenario all --duration 12 --at 5
       - name: Dump logs on failure
         if: failure()
-        run: cat /tmp/dev.log /tmp/dev3.log 2>/dev/null || true
+        run: cat /tmp/dev.log /tmp/dev2.log /tmp/dev-sem.log /tmp/dev3.log 2>/dev/null || true
