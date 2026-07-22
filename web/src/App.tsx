@@ -14,6 +14,7 @@ import { Waterfall } from "./components/Waterfall";
 import { InspectorOverlay } from "./scenes/inspector/InspectorOverlay";
 import { pickSource } from "./sources/pick";
 import type { Source } from "./sources/live";
+import { traceFromHash, writeTraceHash } from "./state/permalink";
 import { useLucent } from "./state/store";
 
 export function App() {
@@ -49,10 +50,32 @@ export function App() {
         src.onReplayLoop = () => useLucent.getState().resetReplay();
       }
       src.start();
+      // A `#/trace/{hex}` permalink opens the inspector once the source (and
+      // thus replay-vs-live) is known, so it loads from the right place.
+      const t = traceFromHash();
+      if (t) useLucent.getState().openInspector(t);
     });
     return () => {
       cancelled = true;
       unsub();
+    };
+  }, []);
+
+  // Keep the URL hash and the open inspector trace in sync both ways.
+  useEffect(() => {
+    const unsub = useLucent.subscribe((s, p) => {
+      if (s.inspectorTrace !== p.inspectorTrace) writeTraceHash(s.inspectorTrace);
+    });
+    const onHash = () => {
+      const t = traceFromHash();
+      const st = useLucent.getState();
+      if (t && t !== st.inspectorTrace) st.openInspector(t);
+      else if (!t && st.inspectorTrace) st.closeInspector();
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      unsub();
+      window.removeEventListener("hashchange", onHash);
     };
   }, []);
 
