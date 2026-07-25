@@ -78,12 +78,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Python project + locked deps. EMBED_EXTRA="--extra embed" pulls the real
-# MiniLM stack (torch — large); empty by default so the image stays small and
-# the demo runs on the deterministic --fake-embed encoder (no model download).
+# Python project + locked deps. `ingest` (grpcio + numpy) is always required —
+# the embed service and ingest can't run without it. EMBED_EXTRA="--extra embed"
+# additionally pulls the real MiniLM stack (torch — large); empty keeps the image
+# small and runs the deterministic --fake-embed encoder (no model download).
 COPY py/ py/
 ARG EMBED_EXTRA=""
-RUN cd py && uv sync --frozen ${EMBED_EXTRA}
+RUN cd py && uv sync --frozen --extra ingest ${EMBED_EXTRA}
 
 # C++ binaries on PATH (find_binary: build/dev → build/release → which()).
 COPY --from=cpp-build /src/build/release/cpp/shard/lucent-shard        /usr/local/bin/
@@ -102,10 +103,14 @@ COPY testdata/ testdata/
 COPY deploy/docker-entrypoint.sh /usr/local/bin/lucent-entrypoint
 RUN chmod +x /usr/local/bin/lucent-entrypoint
 
-# Tunables (overridable in docker-compose or `docker run -e`).
+# Tunables (overridable in docker-compose or `docker run -e`). The fake/real
+# default tracks the build: a real-model image (EMBED_EXTRA set) defaults to the
+# real encoder, a slim image to --fake-embed. DEFAULT_FAKE_EMBED must be passed
+# accordingly by whoever builds (docker.yml sets it to 0 for the published image).
+ARG DEFAULT_FAKE_EMBED=1
 ENV LUCENT_SHARDS=2 \
     LUCENT_REPLICAS=1 \
-    LUCENT_FAKE_EMBED=1 \
+    LUCENT_FAKE_EMBED=${DEFAULT_FAKE_EMBED} \
     LUCENT_INGEST_N=2000 \
     LUCENT_CORPUS=testdata/corpus-2k.jsonl
 EXPOSE 8080

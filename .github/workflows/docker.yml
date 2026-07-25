@@ -42,8 +42,31 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
+          # Real-model image: include the MiniLM/torch stack and default to the
+          # real encoder. Build a slim --fake image by dropping these args.
+          build-args: |
+            EMBED_EXTRA=--extra embed
+            DEFAULT_FAKE_EMBED=0
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Registry cache (stored as a GHCR tag) — reliable, unlike the flaky
+          # type=gha backend that failed the first run's cache export.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+
+      # Prove the published image actually boots (catches missing runtime deps).
+      # Fake encoder + no ingest → fast; real ranking is verified separately.
+      - name: Smoke test — image boots and serves /api/ready
+        run: |
+          IMG=ghcr.io/${{ github.repository }}:latest
+          docker pull "$IMG"
+          docker run -d --name smoke -p 8080:8080 -e LUCENT_FAKE_EMBED=1 -e LUCENT_CORPUS="" "$IMG"
+          ok=0
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/api/ready >/dev/null 2>&1 && { ok=1; break; }
+            sleep 3
+          done
+          echo "--- container logs ---"; docker logs smoke 2>&1 | tail -30
+          docker rm -f smoke >/dev/null 2>&1 || true
+          [ "$ok" = 1 ] && echo "SMOKE OK: cluster booted + /api/ready served" || { echo "SMOKE FAILED"; exit 1; }

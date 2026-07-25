@@ -70,3 +70,69 @@ and rebuild. Note this pulls the torch stack (large image, ~model download).
    `--platform`); the C++ binaries are native.
 6. **First-boot ingest timing.** The entrypoint waits up to 180 s for the
    gateway; a very large `LUCENT_INGEST_N` may need a longer window.
+
+## Deploying a live public instance (Level C)
+
+Goal: a 24/7 public URL where anyone can type a query and watch it think, on the
+real MiniLM model. The image is **built + published by CI** (`.github/workflows/docker.yml`,
+GitHub's arm64 runner → `ghcr.io/swarina/lucent:latest`), so the host just pulls
+and runs it — no build on the box.
+
+**Why Oracle Cloud Always-Free ARM:** the real model pulls in PyTorch (~2 GB
+RAM), which rules out the tiny free tiers (Render/Fly free = 256 MB–1 GB). Oracle's
+Always-Free **Ampere A1** gives up to 4 OCPU / 24 GB RAM at no cost, and it's
+arm64 — matching the published image. (A home machine + Cloudflare Tunnel is a
+fine free alternative if you'd rather not use a cloud VM.)
+
+### One-time setup
+
+1. **Create the VM.** Oracle Cloud → Compute → Instances → Create. Shape
+   **VM.Standard.A1.Flex**, e.g. 2 OCPU / 12 GB, image **Ubuntu 24.04 (aarch64)**.
+   Save the SSH key. (Signup needs a card for identity check; Always-Free isn't billed.)
+2. **Open the port.** VCN → the instance's subnet → Security List → add an
+   ingress rule: source `0.0.0.0/0`, TCP, dest port **80**. Then on the box:
+   `sudo iptables -I INPUT 6 -p tcp --dport 80 -j ACCEPT` (Oracle images ship a
+   restrictive iptables) and persist with `sudo netfilter-persistent save`.
+3. **Install Docker:** `curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker $USER` (re-login).
+4. **Make the image pullable.** Either make the GHCR package public
+   (github.com → your profile → Packages → `lucent` → Package settings → Change
+   visibility → Public), or `docker login ghcr.io -u <you>` with a PAT that has
+   `read:packages`.
+
+### Run it
+
+```sh
+docker run -d --name lucent --restart unless-stopped \
+  -p 80:8080 \
+  -e LUCENT_FAKE_EMBED=0 \
+  -e LUCENT_SHARDS=2 \
+  -v lucent-data:/app/data \
+  ghcr.io/swarina/lucent:latest
+```
+
+First boot downloads MiniLM (~90 MB) and ingests the bundled corpus (a couple of
+minutes on CPU); the index is cached in the `lucent-data` volume for restarts.
+Watch it come up with `docker logs -f lucent`, then open `http://<vm-public-ip>/`.
+
+### HTTPS + a real hostname (optional)
+
+Put **Caddy** in front for automatic TLS (needs a domain pointed at the VM):
+
+```sh
+# /etc/caddy/Caddyfile
+lucent.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+Or expose it without a domain via a free **Cloudflare Tunnel**
+(`cloudflared tunnel --url http://localhost:8080`).
+
+### Guardrails (public exposure)
+
+The cluster exposes chaos endpoints (`/api/chaos/kill`, `/api/fault`, `/api/loadgen`)
+that anyone hitting the URL could trigger — fine for a demo, but if you want to
+lock them down, front the app with Caddy and allow only `GET /`, `/assets/*`,
+`/api/query`, `/api/cluster`, `/api/ready`, `/ws/live`, and the `/api/trace|projection`
+reads; block the mutating `POST`s. Consider a basic rate limit too.
+
