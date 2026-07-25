@@ -55,18 +55,22 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
-      # Prove the published image actually boots (catches missing runtime deps).
-      # Fake encoder + no ingest → fast; real ranking is verified separately.
-      - name: Smoke test — image boots and serves /api/ready
+      # Prove the published image actually works end-to-end: boot the cluster,
+      # ingest (fake encoder + small N → fast), and confirm a query returns hits.
+      # Real ranking is verified separately; this gates the whole runtime path.
+      - name: Smoke test — boot, ingest, query
         run: |
           IMG=ghcr.io/${{ github.repository }}:latest
           docker pull "$IMG"
-          docker run -d --name smoke -p 8080:8080 -e LUCENT_FAKE_EMBED=1 -e LUCENT_CORPUS="" "$IMG"
+          docker run -d --name smoke -p 8080:8080 \
+            -e LUCENT_FAKE_EMBED=1 -e LUCENT_INGEST_N=500 "$IMG"
+          for i in $(seq 1 60); do curl -sf http://localhost:8080/api/ready >/dev/null 2>&1 && break; sleep 3; done
           ok=0
           for i in $(seq 1 60); do
-            curl -sf http://localhost:8080/api/ready >/dev/null 2>&1 && { ok=1; break; }
+            r=$(curl -sf -X POST http://localhost:8080/api/query -H 'content-type: application/json' -d '{"text":"quantum","k":3}' 2>/dev/null || true)
+            case "$r" in *'"docId"'*) ok=1; break;; esac
             sleep 3
           done
-          echo "--- container logs ---"; docker logs smoke 2>&1 | tail -30
+          echo "--- container logs ---"; docker logs smoke 2>&1 | tail -40
           docker rm -f smoke >/dev/null 2>&1 || true
-          [ "$ok" = 1 ] && echo "SMOKE OK: cluster booted + /api/ready served" || { echo "SMOKE FAILED"; exit 1; }
+          [ "$ok" = 1 ] && echo "SMOKE OK: booted + ingested + query returned hits" || { echo "SMOKE FAILED"; exit 1; }

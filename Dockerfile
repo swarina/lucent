@@ -32,7 +32,12 @@ RUN git clone https://github.com/microsoft/vcpkg.git /opt/vcpkg \
 ENV VCPKG_ROOT=/opt/vcpkg VCPKG_FORCE_SYSTEM_BINARIES=1
 
 WORKDIR /src
-COPY . /src
+# Copy only the C++ build inputs (not the whole repo) so edits to docs, the web
+# app, or the workflow don't invalidate this expensive layer's cache.
+COPY CMakeLists.txt CMakePresets.json vcpkg.json /src/
+COPY cpp/ /src/cpp/
+COPY proto/ /src/proto/
+COPY triplets/ /src/triplets/
 # The CMake preset references ${sourceDir}/vcpkg; point it at the cloned copy.
 RUN ln -s /opt/vcpkg /src/vcpkg
 # Release build → static-linked binaries on the default linux triplet. The
@@ -78,13 +83,19 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Python project + locked deps. `ingest` (grpcio + numpy) is always required —
-# the embed service and ingest can't run without it. EMBED_EXTRA="--extra embed"
-# additionally pulls the real MiniLM stack (torch — large); empty keeps the image
-# small and runs the deterministic --fake-embed encoder (no model download).
+# Python project + locked deps. `ingest` (grpcio + numpy) and `dev` (grpcio-tools
+# + protobuf, needed to generate AND import the Python proto stubs) are always
+# required. EMBED_EXTRA="--extra embed" additionally pulls the real MiniLM stack
+# (torch — large); empty runs the deterministic --fake-embed encoder (no model).
 COPY py/ py/
 ARG EMBED_EXTRA=""
-RUN cd py && uv sync --frozen --extra ingest ${EMBED_EXTRA}
+RUN cd py && uv sync --frozen --extra ingest --extra dev ${EMBED_EXTRA}
+
+# Generate the Python proto bindings (lucent.v1) that embedsvc + ingest import —
+# they're gitignored, so the image must regenerate them (mirrors gen-proto.sh py).
+COPY proto/ proto/
+COPY tools/ tools/
+RUN bash tools/gen-proto.sh py
 
 # C++ binaries on PATH (find_binary: build/dev → build/release → which()).
 COPY --from=cpp-build /src/build/release/cpp/shard/lucent-shard        /usr/local/bin/
