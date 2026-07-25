@@ -35,10 +35,14 @@ async function main(): Promise<void> {
     console.warn(`web dist not found at ${webDist} — API only`);
   }
 
-  await app.listen({ port: config.ports.gatewayHttp, host: "127.0.0.1" });
+  // Bind localhost by default (safe for `lucent dev`); containers/hosts that need
+  // the gateway reachable from outside set LUCENT_HTTP_HOST=0.0.0.0. Only the
+  // public HTTP listener changes — inter-service gRPC stays on 127.0.0.1.
+  const httpHost = process.env.LUCENT_HTTP_HOST ?? "127.0.0.1";
+  await app.listen({ port: config.ports.gatewayHttp, host: httpHost });
   attachLiveWs(app.server, store);
   console.log(
-    `collector-0: http://127.0.0.1:${config.ports.gatewayHttp} (REST + /ws/live + static)`,
+    `collector-0: http://${httpHost}:${config.ports.gatewayHttp} (REST + /ws/live + static)`,
   );
 
   const shutdown = (): void => {

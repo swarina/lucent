@@ -123,6 +123,8 @@ ENV LUCENT_SHARDS=2 \
     LUCENT_REPLICAS=1 \
     LUCENT_FAKE_EMBED=${DEFAULT_FAKE_EMBED} \
     LUCENT_INGEST_N=2000 \
-    LUCENT_CORPUS=testdata/corpus-2k.jsonl
+    LUCENT_CORPUS=testdata/corpus-2k.jsonl \
+    LUCENT_HTTP_HOST=0.0.0.0
+
 EXPOSE 8080
 ENTRYPOINT ["lucent-entrypoint"]
