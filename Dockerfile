@@ -1,9 +1,9 @@
+# syntax=docker/dockerfile:1
 # Lucent — all-in-one image (M6-T4).
 #
-# ⚠️ AUTHORED BUT NOT YET BUILT: this environment has no Docker daemon, so this
-# Dockerfile has not been built or run. The C++ (vcpkg) stage in particular will
-# likely need a build-iterate pass. Treat this as a reviewed first draft; run
-# `docker compose build` locally and adjust from the errors. See deploy/README.md.
+# Built + published by .github/workflows/docker.yml (GitHub Actions has a Docker
+# daemon; the dev env doesn't). The C++ (vcpkg) stage uses a BuildKit cache mount
+# so grpc/protobuf aren't rebuilt from scratch on every CI iteration.
 #
 # Why one image, not one-container-per-service: Lucent's whole model is a
 # supervisor (`lucent dev`) that spawns N processes on one host and orchestrates
@@ -35,8 +35,13 @@ WORKDIR /src
 COPY . /src
 # The CMake preset references ${sourceDir}/vcpkg; point it at the cloned copy.
 RUN ln -s /opt/vcpkg /src/vcpkg
-# Release build → static-linked binaries on the default linux triplet.
-RUN cmake --preset release && cmake --build --preset release
+# Release build → static-linked binaries on the default linux triplet. The
+# BuildKit cache mount persists vcpkg's built binary packages across CI runs so
+# grpc/protobuf/abseil aren't recompiled every iteration.
+ENV VCPKG_DEFAULT_BINARY_CACHE=/vcpkg-cache
+RUN --mount=type=cache,target=/vcpkg-cache \
+    mkdir -p /vcpkg-cache && \
+    cmake --preset release && cmake --build --preset release
 
 # ---------------------------------------------------------------------------
 # Stage 2 — Node gateway (REST/WS + collector). Needs generated TS proto stubs.
