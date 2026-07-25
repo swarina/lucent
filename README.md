@@ -118,6 +118,10 @@ This is a learning-first portfolio project under a hard zero-cost constraint, no
 
 Zero recurring cost — no paid APIs, ever. Embeddings run locally on CPU; the "cluster" is N processes on one machine; the hosted demo is a static replay of recorded traces. The vector index is immutable after build (rebuild to change the corpus), and instrumentation never touches the search path (bounded buffers, drop-on-overflow, full traces only for UI-initiated queries).
 
+## Data
+
+The bundled `testdata/corpus-2k.jsonl` and the optional larger corpus are [arXiv](https://arxiv.org/) paper metadata (titles + abstracts), used here purely as a search corpus. Thanks to arXiv for use of its open metadata; Lucent is not affiliated with or endorsed by arXiv.
+
 ## License
 
 [MIT](LICENSE) © 2026 Swarina Jaiswal
