@@ -1,9 +1,9 @@
 # Docker packaging
 
-> **⚠️ Status: authored, not yet built.** These files were written without a
-> Docker daemon available, so they have **not** been built or run. The C++
-> (vcpkg) stage especially is likely to need a build-iterate pass. Treat this as
-> a reviewed first draft — run `docker compose build` and fix from the errors.
+> **✅ Status: built + verified in CI.** `.github/workflows/docker.yml` builds the
+> arm64 image on GitHub's runners and publishes it to `ghcr.io/swarina/lucent:latest`;
+> a smoke test boots the container, ingests, and confirms a query returns hits
+> ("SMOKE OK"). The `docker compose build` path below is the local equivalent.
 
 ## What it is
 

@@ -7,7 +7,7 @@ name: docker-image
 on:
   workflow_dispatch:
   push:
-    branches: [m6-t4-docker]
+    branches: [main]
     paths:
       - "Dockerfile"
       - "docker-compose.yml"

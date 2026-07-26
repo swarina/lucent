@@ -1,6 +1,7 @@
 # Lucent — docker-compose packaging (M6-T4).
 #
-# ⚠️ AUTHORED BUT NOT YET BUILT — see the note in the Dockerfile and deploy/README.md.
+# ✅ Built + CI-verified (see deploy/README.md). The published image is
+#    ghcr.io/swarina/lucent:latest; compose below is for local builds.
 #
 #   docker compose --profile demo up --build     # one-command demo: builds a 2k
 #                                                 # index on first boot, then serves
