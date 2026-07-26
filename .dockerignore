@@ -1,0 +1,18 @@
+# Keep the build context small. vcpkg is re-cloned inside the image at the
+# pinned baseline, so its ~10 GB working dir must not be sent to the daemon.
+/vcpkg/
+/build/
+/data/
+/.lucent/
+/bundle/
+**/node_modules
+web/dist
+gateway/dist
+py/.venv
+**/__pycache__
+.git
+.github
+*.log
+.cache
+# NOTE: web/public/bundle IS kept — it's the committed demo bundle the web
+# build copies into dist/ (do not add a bare `bundle/` pattern above).

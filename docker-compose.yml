@@ -1,0 +1,58 @@
+# Lucent — docker-compose packaging (M6-T4).
+#
+# ✅ Built + CI-verified (see deploy/README.md). The published image is
+#    ghcr.io/swarina/lucent:latest; compose below is for local builds.
+#
+#   docker compose --profile demo up --build     # one-command demo: builds a 2k
+#                                                 # index on first boot, then serves
+#   docker compose up --build                     # base cluster; ingest yourself
+#
+# Both run the SAME image (the supervisor manages the multi-process cluster inside
+# the container). Open http://localhost:8080.
+
+services:
+  # Base cluster: starts the supervisor but ingests nothing (LUCENT_CORPUS empty).
+  # Bring your own corpus:  docker compose exec lucent \
+  #   uv --project py run lucent ingest --config .lucent/cluster-dev.yaml \
+  #   --corpus testdata/corpus-2k.jsonl --n 2000
+  lucent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lucent:latest
+    ports:
+      - "8080:8080"
+    environment:
+      LUCENT_SHARDS: "2"
+      LUCENT_FAKE_EMBED: "1"
+      LUCENT_CORPUS: ""          # no auto-ingest for the base service
+    volumes:
+      - lucent-data:/app/data
+    stop_grace_period: 15s
+
+  # Demo: auto-ingests the bundled corpus on first boot (index cached in the
+  # volume), so `--profile demo up` gives a working "watch it think" cluster with
+  # no extra steps. Deterministic --fake-embed encoder → no model download; set
+  # LUCENT_FAKE_EMBED=0 and rebuild with EMBED_EXTRA to use real MiniLM.
+  lucent-demo:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # args:
+      #   EMBED_EXTRA: "--extra embed"   # uncomment for the real MiniLM model
+    image: lucent:latest
+    ports:
+      - "8080:8080"
+    environment:
+      LUCENT_SHARDS: "2"
+      LUCENT_FAKE_EMBED: "1"
+      LUCENT_INGEST_N: "2000"
+      LUCENT_CORPUS: "testdata/corpus-2k.jsonl"
+    volumes:
+      - lucent-demo-data:/app/data
+    stop_grace_period: 15s
+
+volumes:
+  lucent-data:
+  lucent-demo-data:
