@@ -1,0 +1,39 @@
+# One-off verification: pull the published image and run it with the REAL model
+# (LUCENT_FAKE_EMBED=0), exactly as a VM deploy would — confirms torch on arm64 +
+# MiniLM download + real ingest + a semantic query all work in the container.
+# No rebuild; just pulls ghcr.io/…:latest. Trigger via the Actions tab or gh.
+name: docker-smoke-real
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  smoke-real:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run the real-model image and query it
+        run: |
+          IMG=ghcr.io/${{ github.repository }}:latest
+          docker pull "$IMG"
+          docker run -d --name real -p 8080:8080 \
+            -e LUCENT_FAKE_EMBED=0 -e LUCENT_INGEST_N=500 "$IMG"
+          for i in $(seq 1 120); do curl -sf http://localhost:8080/api/ready >/dev/null 2>&1 && break; sleep 3; done
+          ok=0
+          for i in $(seq 1 120); do
+            r=$(curl -sf -X POST http://localhost:8080/api/query -H 'content-type: application/json' \
+                 -d '{"text":"quantum entanglement between photons","k":3}' 2>/dev/null || true)
+            case "$r" in *'"docId"'*) ok=1; echo "REAL QUERY RESULT:"; echo "$r" | head -c 500; echo; break;; esac
+            sleep 3
+          done
+          echo "--- container logs ---"; docker logs real 2>&1 | tail -40
+          docker rm -f real >/dev/null 2>&1 || true
+          [ "$ok" = 1 ] && echo "REAL SMOKE OK — the deployed config works" || { echo "REAL SMOKE FAILED"; exit 1; }
