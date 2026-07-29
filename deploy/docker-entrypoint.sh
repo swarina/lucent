@@ -23,17 +23,23 @@ dev_pid=$!
 # Stop the supervisor cleanly if the container is asked to stop.
 trap 'echo "[entrypoint] stopping"; kill -TERM "$dev_pid" 2>/dev/null || true; wait "$dev_pid" 2>/dev/null || true' TERM INT
 
-echo "[entrypoint] waiting for gateway :8080 to become ready ..."
+echo "[entrypoint] waiting for gateway + embed model to be ready ..."
 ready=0
-for _ in $(seq 1 180); do
-  if curl -sf http://127.0.0.1:8080/api/ready >/dev/null 2>&1; then ready=1; break; fi
+# Wait for the embed service to be fully up — `embedModel` in /api/ready is only
+# populated once the encoder has loaded and bound :7001. With the real model that
+# lags HTTP-ready by the MiniLM load, and ingest talks to :7001 directly, so
+# waiting only for HTTP 200 would race the encoder ("connection refused :7001").
+# 300 × 2s = 10 min, generous for a cold model download.
+for _ in $(seq 1 300); do
+  resp="$(curl -sf http://127.0.0.1:8080/api/ready 2>/dev/null || true)"
+  if printf '%s' "$resp" | grep -qE '"embedModel"[[:space:]]*:[[:space:]]*"[^"]+"'; then ready=1; break; fi
   if ! kill -0 "$dev_pid" 2>/dev/null; then
     echo "[entrypoint] supervisor exited before becoming ready" >&2
     wait "$dev_pid"; exit 1
   fi
-  sleep 1
+  sleep 2
 done
-[ "$ready" = 1 ] || { echo "[entrypoint] gateway never became ready" >&2; kill "$dev_pid" 2>/dev/null || true; exit 1; }
+[ "$ready" = 1 ] || { echo "[entrypoint] cluster/embed never became ready" >&2; kill "$dev_pid" 2>/dev/null || true; exit 1; }
 
 # Ingest once. The supervisor wrote the effective config to .lucent/cluster-dev.yaml.
 if [ -n "$CORPUS" ] && [ ! -f "$MARKER" ]; then
