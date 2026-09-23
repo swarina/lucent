@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { ChaosMenu } from "./components/ChaosMenu";
 import { ClusterPanel } from "./components/ClusterPanel";
+import { FirstRunWizard } from "./components/FirstRunWizard";
 import { QueryBar } from "./components/QueryBar";
 import { ReplayChip } from "./components/ReplayChip";
 import { ResultsPanel } from "./components/ResultsPanel";
@@ -82,16 +83,45 @@ export function App() {
   return (
     <div className="theater">
       <FakeEmbedBanner />
+      <ConnectionBanner />
       {source?.replay && <ReplayChip source={source} />}
       <QueryBar source={source} />
       <div className="mainrow">
         <Stage />
+        <FirstRunWizard />
         <ResultsPanel />
       </div>
       <Waterfall />
       <ClusterPanel />
       <InspectorOverlay />
       <ChaosMenu />
+    </div>
+  );
+}
+
+// Backend gone (frontend.md §6): once a live cluster has been reachable, a
+// dropped connection shows a reconnect banner. Gated behind a short delay so the
+// normal sub-second boot handshake never flashes it.
+function ConnectionBanner() {
+  const connected = useLucent((s) => s.connected);
+  const replay = useLucent((s) => !!s.source?.replay);
+  const source = useLucent((s) => s.source);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    if (replay || !source || connected) {
+      setShow(false);
+      return;
+    }
+    const t = setTimeout(() => setShow(true), 1500);
+    return () => clearTimeout(t);
+  }, [connected, replay, source]);
+
+  if (!show) return null;
+  return (
+    <div className="conn-banner">
+      <span className="cb-dot" />
+      Connection to the cluster lost. Reconnecting…
     </div>
   );
 }
